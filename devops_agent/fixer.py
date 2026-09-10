@@ -83,7 +83,9 @@ Règles, non négociables :
    → test de fumée. Images d'outils officielles et épinglées ; variables et secrets attendus documentés en
    commentaire en tête du fichier. Le fichier doit être valide tel quel pour la plateforme (GitLab ou GitHub).
 7. Dockerfiles : multi-étapes s'il y a une compilation, utilisateur non-root, et chaque fichier copié (COPY/ADD)
-   existe réellement dans le dépôt — sans lockfile présent, pas de `npm ci` mais `npm install`.
+   existe réellement dans le dépôt — sans lockfile présent, pas de `npm ci` mais `npm install`. Le .dockerignore
+   du contexte de build n'exclut AUCUN fichier copié ; si plusieurs images partagent la racine comme contexte
+   avec des besoins différents, chaque Dockerfile reçoit son propre `<chemin du Dockerfile>.dockerignore`.
 8. Tu restes cohérent avec ce que le dépôt contient réellement (noms de services, ports, chemins) : tu les
    reprends des extraits fournis, tu n'en inventes pas.
 9. Tu réponds en français et UNIQUEMENT dans le format JSON demandé."""

@@ -224,7 +224,14 @@ connues sont corrigées par des **règles déterministes**, sans appel au modèl
 | ConfigMap ou Secret référencé sous un autre nom | noms alignés |
 | PostgreSQL qui ne peut pas initialiser son volume | `PGDATA` dans un sous-dossier, uid de l'image (70 alpine, 999 Debian) |
 | Ingress qui vise un service inexistant | service corrigé |
-| sondes de santé refusées en HTTP 429 (limitation de débit) | sondes TCP sur le même port |
+| sondes de santé en échec : HTTP 429 (limitation de débit) ou 502/503/504 (la route passe par un autre service) | sondes TCP sur le même port |
+| fichiers copiés « introuvables » qui existent ailleurs dans le dépôt | contexte de build corrigé, Dockerfile intact ; les blocs `docker/build-push-action` de GitHub Actions sont lus |
+| `.dockerignore` du contexte qui exclut des fichiers copiés | `<Dockerfile>.dockerignore` propre à ce Dockerfile, sans ces motifs |
+| volume monté mais jamais déclaré dans le pod | volume déclaré depuis la ConfigMap ou le Secret correspondant, `subPath` pour un fichier |
+| ConfigMap ou Secret référencé sous un autre nom (`configmap-env` au lieu de `quiz-app-env`) | noms alignés, détecté avant l'application |
+| Service dont le sélecteur ne vise aucun pod (aucun endpoint) | sélecteur aligné sur celui de sa charge de travail |
+| nginx : `duplicate upstream` (ConfigMap montée à côté de la configuration de l'image) | la ConfigMap remplace tout `/etc/nginx/conf.d` |
+| pod de StatefulSet bloqué sur une ancienne révision | pod supprimé, recréé avec la nouvelle |
 
 Après un démarrage réussi, l'agent observe encore une vingtaine de secondes : des sondes refusées rendent l'appli instable, c'est traité comme un échec.
 Le reste part au modèle, avec le seul contexte utile à l'étape en échec. Rapport :

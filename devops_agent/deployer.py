@@ -318,15 +318,113 @@ def detect_builds(src: Path, project: str) -> list[Build]:
                     context = positional[-1]
                 add(dockerfile, context, tags, f"pipeline ({ci.relative_to(src).as_posix()})")
 
+    # GitHub Actions : docker/build-push-action décrit le build en YAML (with: context / file / tags).
+    import yaml
+    for ci in sorted(list(src.glob(".github/workflows/*.yml")) + list(src.glob(".github/workflows/*.yaml"))):
+        try:
+            wf = yaml.safe_load(ci.read_text(encoding="utf-8", errors="replace")) or {}
+        except yaml.YAMLError:
+            continue
+        for job in (wf.get("jobs") or {}).values() if isinstance(wf, dict) else []:
+            for step in (job or {}).get("steps") or [] if isinstance(job, dict) else []:
+                if not isinstance(step, dict) or "docker/build-push-action" not in str(step.get("uses", "")):
+                    continue
+                w = step.get("with") or {}
+                context = str(w.get("context") or ".")
+                dockerfile = str(w.get("file") or (context.rstrip("/") + "/Dockerfile"))
+                tags = [t.strip() for t in re.split(r"[\n,]", str(w.get("tags") or "")) if t.strip() and "$" not in t]   # tags à variables : le nom vient du dossier
+                add(dockerfile, context, tags, f"pipeline ({ci.relative_to(src).as_posix()})")
+
     if not found:
         for df in sorted(src.glob("Dockerfile.*")):
             if not df.name.endswith((".dockerignore", ".md")):
                 add(df.name, ".", [], "convention (Dockerfile.<nom>)")
         for df in sorted(src.glob("*/Dockerfile")):
-            add(df.relative_to(src).as_posix(), df.parent.name, [], "convention (<nom>/Dockerfile)")
+            add(df.relative_to(src).as_posix(), _best_context(src, df), [], "convention (<nom>/Dockerfile)")
         if (src / "Dockerfile").is_file():
             add("Dockerfile", ".", [], "convention (Dockerfile)")
     return found
+
+
+def _copy_sources(df: Path, globs: bool = False) -> list[str]:
+    """Fichiers copiés depuis le contexte par un Dockerfile (COPY/ADD hors --from, sans variables ;
+    les motifs comme questions_*.js ne sont gardés qu'avec globs=True)."""
+    out = []
+    try:
+        text = re.sub(r"\\\s*\n", " ", df.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return out
+    for line in text.splitlines():
+        m = re.match(r"^\s*(?:COPY|ADD)\s+((?:--\S+\s+)*)(.+)$", line, re.I)
+        if not m or "--from" in m.group(1):
+            continue
+        try:
+            parts = shlex.split(m.group(2))
+        except ValueError:
+            continue
+        out += [_norm(x) for x in parts[:-1] if "$" not in x and not x.startswith(("http://", "https://"))
+                and (globs or not any(ch in x for ch in "*?["))]
+    return out
+
+
+def _best_context(src: Path, df: Path) -> str:
+    """Contexte d'un <dossier>/Dockerfile sans pipeline pour le dire : son dossier si ses COPY y trouvent leurs
+    fichiers, sinon la racine du dépôt (Dockerfile rangé dans un sous-dossier mais écrit pour la racine)."""
+    local = df.parent.relative_to(src).as_posix()
+    sources = _copy_sources(df)
+    if not sources:
+        return local
+    here = sum(1 for x in sources if (df.parent / x).exists())
+    root = sum(1 for x in sources if (src / x).exists())
+    return "." if root > here else local
+
+
+_IGNORED = re.compile(r'Attempting to Copy file "([^"]+)" that is excluded by \.dockerignore')
+
+
+def known_dockerignore_fix(src: Path, b: Build, log: str) -> tuple[dict[str, str], list[str]] | None:
+    """Le .dockerignore du contexte exclut des fichiers que ce Dockerfile copie (avertissement CopyIgnoredFile) :
+    on donne au Dockerfile son propre `<Dockerfile>.dockerignore` — BuildKit le préfère à celui du contexte —
+    identique, moins les motifs qui excluaient des fichiers copiés. Les autres builds ne sont pas touchés."""
+    import fnmatch
+    warned = {_norm(x) for x in _IGNORED.findall(log)}
+    if not warned:
+        return None
+    ignore = src / b.context / ".dockerignore"
+    if not ignore.is_file():
+        return None
+    sources = set(_copy_sources(src / b.dockerfile, globs=True)) | warned
+
+    def excludes(pat: str, s: str) -> bool:
+        pat = pat.strip().lstrip("/").rstrip("/")
+        pat = pat[3:] if pat.startswith("**/") else pat
+        return (fnmatch.fnmatch(s, pat) or fnmatch.fnmatch(pat, s) or s.startswith(pat + "/")
+                or pat.startswith(s.rstrip("/") + "/") or fnmatch.fnmatch(s.split("/")[0], pat))
+
+    keep, dropped = [], []
+    for line in ignore.read_text(encoding="utf-8", errors="replace").splitlines():
+        t = line.strip()
+        if t and not t.startswith(("#", "!")) and any(excludes(t, s) for s in sources):
+            dropped.append(t)
+            continue
+        keep.append(line)
+    if not dropped:
+        return None
+    head = (f"# Propre à {b.dockerfile} : BuildKit le préfère au .dockerignore du contexte ({b.context}).\n"
+            f"# Même contenu, sans les motifs qui excluaient des fichiers copiés : {', '.join(dropped)}.\n")
+    return {f"{b.dockerfile}.dockerignore": head + "\n".join(keep).strip("\n") + "\n"}, dropped
+
+
+def known_context_fix(src: Path, b: Build, log: str) -> str | None:
+    """Les fichiers « introuvables » existent bel et bien, mais ailleurs que dans le contexte de build :
+    c'est le contexte qu'il faut changer, pas le Dockerfile. Renvoie le bon contexte, ou None."""
+    missing = {_norm(m.group(1)) for m in _NOT_FOUND.finditer(log)}
+    if not missing:
+        return None
+    for ctx in (".", Path(b.dockerfile).parent.as_posix() or "."):
+        if ctx != b.context and all((src / ctx / m).exists() for m in missing):
+            return ctx
+    return None
 
 
 def _docker_build(src: Path, b: Build, say: ProgressCb) -> None:
@@ -454,6 +552,18 @@ def _gen_secret() -> str:
     return "local-" + secrets.token_urlsafe(18)
 
 
+def _fuzzy_component(name: str | None, comp: dict) -> str | None:
+    """« quiz-backend », « backend-api », « app_frontend » -> le composant construit contenu dans le nom,
+    comme mot entier, s'il n'y en a qu'un."""
+    if not name:
+        return None
+    name = name.lower()
+    if name in comp:
+        return name
+    hits = [c for c in comp if re.search(rf"(^|[-_.]){re.escape(c.lower())}($|[-_.])", name)]
+    return hits[0] if len(hits) == 1 else None
+
+
 def adapt(docs: list[dict], builds: list[Build], slug: str, port: int, saved_secrets: dict,
           ingress_class: str | None = None) -> tuple[list[dict], dict]:
     """Rend les manifests déployables en local. Retourne (documents, informations)."""
@@ -472,6 +582,13 @@ def adapt(docs: list[dict], builds: list[Build], slug: str, port: int, saved_sec
             for c in _containers(ps):
                 img = str(c.get("image", ""))
                 name = _component_from_ref(img)
+                if name not in comp:
+                    # Image nommée autrement que le composant (« ${REGISTRY}/quiz-backend:${TAG} » -> backend).
+                    # Pour une image faite de variables seulement, le nom de la charge ou du conteneur tranche ;
+                    # une image publique (postgres:17…) n'est jamais remplacée par ce biais.
+                    name = _fuzzy_component(name, comp) or (
+                        (_fuzzy_component(md.get("name"), comp) or _fuzzy_component(c.get("name"), comp))
+                        if ("$" in img or not img) else None)
                 if name in comp:
                     c["image"], c["imagePullPolicy"] = comp[name], "Never"
                 elif "$" in img or not img:
@@ -618,6 +735,32 @@ def _choose_port(kube: Kube, previous: int | None, kind: str = "desktop") -> int
 # ---------------------------------------------------------------------------
 # Déploiement, surveillance, diagnostic
 # ---------------------------------------------------------------------------
+
+def _recreate_stuck_statefulset_pods(kube: Kube, ns: str, say: ProgressCb) -> None:
+    """Un StatefulSet ne remplace pas un pod qui n'a jamais démarré sur une ancienne révision
+    (CreateContainerConfigError, CrashLoopBackOff…) : limite connue de Kubernetes, qui attend une
+    intervention. On supprime ces pods ; le contrôleur les recrée aussitôt avec la nouvelle révision."""
+    try:
+        sets = kube.json("get", "statefulset", "-n", ns).get("items", [])
+    except DeployError:
+        return
+    for st in sets:
+        upd = (st.get("status") or {}).get("updateRevision")
+        labels = ((st.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+        if not upd or not labels:
+            continue
+        try:
+            pods = kube.json("get", "pods", "-n", ns, "-l", ",".join(f"{k}={v}" for k, v in labels.items())).get("items", [])
+        except DeployError:
+            continue
+        for pod in pods:
+            rev = (pod.get("metadata") or {}).get("labels", {}).get("controller-revision-hash")
+            cs = (pod.get("status") or {}).get("containerStatuses") or []
+            if rev and rev != upd and not (cs and all(c.get("ready") for c in cs)):
+                kube.run("delete", "pod", pod["metadata"]["name"], "-n", ns, "--wait=false")
+                say("apply", f"pod {pod['metadata']['name']} bloqué sur une ancienne révision de son StatefulSet : "
+                             "supprimé, recréé avec la nouvelle")
+
 
 def _workload_ready(d: dict) -> bool:
     st, spec, md = d.get("status") or {}, d.get("spec") or {}, d.get("metadata") or {}
@@ -821,8 +964,10 @@ def known_build_fix(src: Path, b: Build, log: str) -> dict[str, str] | None:
     Le fichier est retiré de l'instruction (la ligne disparaît si elle n'a plus de source) ; si c'était un
     lockfile, `npm ci` (qui l'exige) devient `npm install`.
     """
-    missing = {_norm(m.group(1)) for m in _NOT_FOUND.finditer(log)}
     df = src / b.dockerfile
+    # Un fichier présent dans le dépôt n'est pas « absent » : ne jamais le retirer du Dockerfile.
+    missing = {m for m in (_norm(x.group(1)) for x in _NOT_FOUND.finditer(log))
+               if not ((src / m).exists() or (df.parent / m).exists())}
     if not missing or not df.is_file():
         return None
     out, removed = [], []
@@ -967,6 +1112,178 @@ def _ingress_backends(d: dict) -> list[dict]:
     return [b["service"] for b in out if isinstance(b.get("service"), dict)]
 
 
+_MISSING_VOLUME = re.compile(r'The (\w+) "([\w.-]+)" is invalid:[^\n]*?volumeMounts\[\d+\]\.name: Not found: "([\w.-]+)"')
+
+
+def known_volume_fix(src: Path, mdir: Path | None, diagnostic: str) -> tuple[dict[str, str], list[str]] | None:
+    """Correctif déterministe : un conteneur monte un volume que le pod ne déclare pas
+    (« volumeMounts[1].name: Not found: "initdb" »).
+
+    Le volume est déclaré à partir de la ConfigMap, sinon du Secret, dont le nom correspond (« initdb » ->
+    « quiz-app-initdb-sql »). Si le point de montage est un fichier (…/init.sql) et qu'il n'a pas de subPath,
+    on monte la bonne clé seule : sans subPath, Kubernetes créerait un dossier nommé init.sql. À défaut de
+    correspondance, un emptyDir.
+    """
+    import yaml
+    if not mdir:
+        return None
+    wanted = {(k, n): set() for k, n, _ in _MISSING_VOLUME.findall(diagnostic)}
+    for k, n, v in _MISSING_VOLUME.findall(diagnostic):
+        wanted[(k, n)].add(v)
+    if not wanted:
+        return None
+    parsed, sources = [], {"configMap": {}, "secret": {}}
+    for f in sorted(mdir.rglob("*.y*ml")):
+        try:
+            docs = list(yaml.safe_load_all(f.read_text(encoding="utf-8")))
+        except yaml.YAMLError:
+            continue
+        parsed.append((f, docs))
+        for d in docs:
+            if isinstance(d, dict) and d.get("kind") in ("ConfigMap", "Secret") and (d.get("metadata") or {}).get("name"):
+                keys = list((d.get("data") or {}).keys()) + list((d.get("stringData") or {}).keys())
+                sources["configMap" if d["kind"] == "ConfigMap" else "secret"][d["metadata"]["name"]] = keys
+
+    def match(vol: str):
+        for kind in ("configMap", "secret"):
+            names = [n for n in sources[kind] if vol in n or n in vol]
+            if len(names) == 1:
+                return kind, names[0], sources[kind][names[0]]
+        return None
+
+    files, notes = {}, []
+    for f, docs in parsed:
+        changed = False
+        for d in docs:
+            if not isinstance(d, dict):
+                continue
+            key = (d.get("kind"), (d.get("metadata") or {}).get("name"))
+            if key not in wanted:
+                continue
+            for ps in _pod_specs(d):
+                declared = {v.get("name") for v in ps.get("volumes") or []}
+                claims = {(t.get("metadata") or {}).get("name") for t in (d.get("spec") or {}).get("volumeClaimTemplates") or []}
+                for vol in sorted(wanted[key] - declared - claims):
+                    found = match(vol)
+                    if found:
+                        kind, name, keys = found
+                        ref = {"name": name} if kind == "configMap" else {"secretName": name}
+                        ps.setdefault("volumes", []).append({"name": vol, kind: ref})
+                        notes.append(f"{key[0]}/{key[1]} : volume « {vol} » déclaré depuis {'la ConfigMap' if kind == 'configMap' else 'le Secret'} « {name} »")
+                        for c in _containers(ps):
+                            for m in c.get("volumeMounts") or []:
+                                base = posixpath.basename(str(m.get("mountPath", "")).rstrip("/"))
+                                if m.get("name") == vol and "." in base and not m.get("subPath"):
+                                    m["subPath"] = base if base in keys else (keys[0] if len(keys) == 1 else base)
+                                    notes.append(f"{key[0]}/{key[1]} : {m['mountPath']} monté avec subPath « {m['subPath']} » (un fichier, pas un dossier)")
+                    else:
+                        ps.setdefault("volumes", []).append({"name": vol, "emptyDir": {}})
+                        notes.append(f"{key[0]}/{key[1]} : volume « {vol} » absent, déclaré en emptyDir")
+                    changed = True
+        if changed:
+            files[f.relative_to(src).as_posix()] = yaml.safe_dump_all([d for d in docs if d is not None], sort_keys=False, allow_unicode=True)
+    return (files, notes) if files else None
+
+
+_NGINX_DUP = re.compile(r"nginx: \[emerg\] duplicate (?:upstream|server|location)\b[^\n]*? in (/etc/nginx/conf\.d)/")
+
+
+def known_nginx_conf_fix(src: Path, mdir: Path | None, diagnostic: str) -> tuple[dict[str, str], list[str]] | None:
+    """Correctif déterministe : nginx refuse de démarrer (« duplicate upstream "backend" ») parce qu'une ConfigMap
+    est montée comme un fichier dans /etc/nginx/conf.d/, à côté de la configuration déjà copiée par l'image.
+    Le montage remplace alors tout le dossier : seule la configuration fournie par Kubernetes reste."""
+    import yaml
+    if not mdir or not _NGINX_DUP.search(diagnostic):
+        return None
+    workloads = set()
+    for section in diagnostic.split("\n### ")[1:]:
+        if _NGINX_DUP.search(section):
+            workloads |= set(_POD_OF.findall(section.split("\n", 1)[0]))
+    files, notes = {}, []
+    for f in sorted(mdir.rglob("*.y*ml")):
+        try:
+            docs = list(yaml.safe_load_all(f.read_text(encoding="utf-8")))
+        except yaml.YAMLError:
+            continue
+        changed = False
+        for d in docs:
+            if not isinstance(d, dict) or d.get("kind") not in WORKLOADS:
+                continue
+            if workloads and (d.get("metadata") or {}).get("name") not in workloads:
+                continue
+            for ps in _pod_specs(d):
+                cm_vols = {v.get("name") for v in ps.get("volumes") or [] if v.get("configMap")}
+                for c in _containers(ps):
+                    for m in c.get("volumeMounts") or []:
+                        mp = str(m.get("mountPath", ""))
+                        if m.get("name") in cm_vols and mp.startswith("/etc/nginx/conf.d/") and mp.rstrip("/") != "/etc/nginx/conf.d":
+                            m["mountPath"] = "/etc/nginx/conf.d"
+                            m.pop("subPath", None)
+                            notes.append(f"{d['kind']}/{d['metadata']['name']} : ConfigMap nginx montée sur tout /etc/nginx/conf.d "
+                                         f"(au lieu de {mp}), pour ne plus doubler la configuration de l'image")
+                            changed = True
+        if changed:
+            files[f.relative_to(src).as_posix()] = yaml.safe_dump_all([d for d in docs if d is not None], sort_keys=False, allow_unicode=True)
+    return (files, notes) if files else None
+
+
+def _orphan_services(docs: list[dict]) -> list[str]:
+    """Services dont le sélecteur ne correspond aux pods d'aucune charge de travail : sans endpoint,
+    toute connexion est refusée alors que les pods tournent."""
+    labels = [((ps_d.get("spec") or {}).get("template") or {}).get("metadata", {}).get("labels") or {}
+              for ps_d in docs if isinstance(ps_d, dict) and ps_d.get("kind") in WORKLOADS]
+    out = []
+    for d in docs:
+        if not isinstance(d, dict) or d.get("kind") != "Service":
+            continue
+        sel = (d.get("spec") or {}).get("selector") or {}
+        if sel and not any(sel.items() <= lab.items() for lab in labels):
+            out.append(f"Service/{d['metadata']['name']} : sélecteur {sel} sans pod correspondant")
+    return out
+
+
+def known_selector_fix(src: Path, mdir: Path | None) -> tuple[dict[str, str], list[str]] | None:
+    """Correctif déterministe : aligne le sélecteur d'un Service orphelin sur celui de la charge de travail
+    du même nom (ou, sans ambiguïté, de celle dont le nom le contient)."""
+    import yaml
+    if not mdir:
+        return None
+    parsed, workloads = [], {}
+    for f in sorted(mdir.rglob("*.y*ml")):
+        try:
+            docs = list(yaml.safe_load_all(f.read_text(encoding="utf-8")))
+        except yaml.YAMLError:
+            continue
+        parsed.append((f, docs))
+        for d in docs:
+            if isinstance(d, dict) and d.get("kind") in WORKLOADS and (d.get("metadata") or {}).get("name"):
+                spec = d.get("spec") or {}
+                workloads[d["metadata"]["name"]] = ((spec.get("selector") or {}).get("matchLabels") or {},
+                                                    (spec.get("template") or {}).get("metadata", {}).get("labels") or {})
+    files, notes = {}, []
+    for f, docs in parsed:
+        changed = False
+        for d in docs:
+            if not isinstance(d, dict) or d.get("kind") != "Service":
+                continue
+            sel = (d.get("spec") or {}).get("selector") or {}
+            if not sel or any(sel.items() <= tl.items() for _, tl in workloads.values()):
+                continue
+            name = d["metadata"]["name"]
+            target = name if name in workloads else None
+            if not target:
+                cands = [w for w in workloads if re.search(rf"(^|[-_.]){re.escape(w)}($|[-_.])", name)
+                         or re.search(rf"(^|[-_.]){re.escape(name)}($|[-_.])", w)]
+                target = cands[0] if len(cands) == 1 else None
+            if target and workloads[target][0]:
+                d["spec"]["selector"] = dict(workloads[target][0])
+                notes.append(f"Service/{name} : sélecteur {sel} → {workloads[target][0]} (celui de {target}, dont les pods le portent)")
+                changed = True
+        if changed:
+            files[f.relative_to(src).as_posix()] = yaml.safe_dump_all([d for d in docs if d is not None], sort_keys=False, allow_unicode=True)
+    return (files, notes) if files else None
+
+
 def known_ingress_fix(src: Path, mdir: Path | None) -> tuple[dict[str, str], list[str]] | None:
     """Correctif déterministe : Ingress qui vise un service inexistant (« quiz-frontend » au lieu de « frontend »).
 
@@ -1018,7 +1335,7 @@ def known_ingress_fix(src: Path, mdir: Path | None) -> tuple[dict[str, str], lis
     return (files, notes) if files else None
 
 
-_PROBE_429 = re.compile(r"probe failed with statuscode: 429", re.I)
+_PROBE_429 = re.compile(r"probe failed with statuscode: (?:429|502|503|504)", re.I)
 _POD_OF = re.compile(r"(?:pod/)?([a-z0-9][a-z0-9.-]*?)-[a-z0-9]{8,10}-[a-z0-9]{5}\b")
 
 
@@ -1052,7 +1369,7 @@ def known_probe_fix(src: Path, mdir: Path | None, diagnostic: str) -> tuple[dict
                         port = probe.pop("httpGet").get("port")
                         probe["tcpSocket"] = {"port": port}
                         notes.append(f"{d['kind']}/{d['metadata']['name']} : {kind} en TCP sur le port {port} "
-                                     "(la route HTTP de santé répond 429, limitation de débit)")
+                                     "(la route HTTP de santé échoue : limitation de débit, ou proxy vers un autre service)")
                         changed = True
         if changed:
             files[f.relative_to(src).as_posix()] = yaml.safe_dump_all([d for d in docs if d is not None], sort_keys=False, allow_unicode=True)
@@ -1109,21 +1426,31 @@ def known_reference_fix(src: Path, mdir: Path | None, diagnostic: str) -> tuple[
         for d in parsed[f]:
             if isinstance(d, dict) and d.get("kind") in ("ConfigMap", "Secret") and d.get("metadata", {}).get("name"):
                 defined[d["kind"].lower()].add(d["metadata"]["name"])
-    mapping: dict[tuple[str, str], str] = {}
-    for kind, name in missing:
-        cands = [g for g in defined[kind] if g != name and (g.startswith(name) or name.startswith(g))]
-        if len(cands) == 1:
-            mapping[(kind, name)] = cands[0]
-    if not mapping:
+    generic = {"configmap", "cm", "config", "conf", "cfg", "secret", "secrets", "k8s"}
+
+    def words(n: str | None) -> set[str]:
+        return {t for t in re.split(r"[-_.]", (n or "").lower()) if t}
+
+    def resolve(kind: str, name: str, workload: str) -> str | None:
+        """« db-init » -> « db-init-sql » (préfixe) ; « configmap-env » -> « quiz-app-env » (mots significatifs) ;
+        « quiz-app-secrets » référencé par backend -> « backend-secret » (nom de la charge). Toujours sans ambiguïté."""
+        cands = sorted(g for g in defined[kind] if g and g != name)
+        for pick in ([g for g in cands if g.startswith(name) or name.startswith(g)],
+                     [g for g in cands if (words(name) - generic) and (words(name) - generic) <= words(g)],
+                     [g for g in cands if (words(workload) - generic) & words(g)]):
+            if len(pick) == 1:
+                return pick[0]
         return None
+
     files, notes = {}, []
 
     def swap(obj: dict | None, key: str, kind: str, where: str) -> bool:
-        if isinstance(obj, dict) and (kind, obj.get(key)) in mapping:
-            new = mapping[(kind, obj[key])]
-            notes.append(f"{where} : {kind} « {obj[key]} » → « {new} »")
-            obj[key] = new
-            return True
+        if isinstance(obj, dict) and (kind, obj.get(key)) in missing:
+            new = resolve(kind, obj[key], where.split("/", 1)[-1])
+            if new:
+                notes.append(f"{where} : {kind} « {obj[key]} » → « {new} »")
+                obj[key] = new
+                return True
         return False
 
     for f, docs in parsed.items():
@@ -1446,6 +1773,7 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
         ns_created = prev.get("namespace_created") if same_cluster else None   # None : on le saura à l'apply
         ingress_host = None
         attempt, builds, mdir, src = 0, [], None, dep_dir / "src"
+        ctx_override: dict[str, str] = {}               # contextes de build corrigés par la règle dédiée
         while True:
             try:
                 # 2. SOURCES -----------------------------------------------------
@@ -1456,6 +1784,8 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
 
                 # 3. IMAGES ------------------------------------------------------
                 builds = detect_builds(src, project)
+                for b in builds:
+                    b.context = ctx_override.get(b.dockerfile, b.context)
                 for b in builds:
                     b.image = f"devops-agent/{slug}-{_slug(b.component, 20)}:{commit[:12]}"
                 say("build", f"{len(builds)} image(s) à construire : " + (", ".join(f"{b.component} ← {b.dockerfile}" for b in builds) or "aucune"))
@@ -1490,6 +1820,28 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
                 dangling = sorted({f"Ingress/{d['metadata']['name']} → service « {b.get('name')} »"
                                    for d in docs if d.get("kind") == "Ingress" for b in _ingress_backends(d)
                                    if b.get("name") not in svc_names})
+                defined_refs = {(d["kind"].lower(), d["metadata"]["name"]) for d in docs if d.get("kind") in ("ConfigMap", "Secret")}
+                broken = set()
+                for d in docs:
+                    for ps in _pod_specs(d):
+                        refs = [("configmap", (v.get("configMap") or {})) for v in ps.get("volumes") or []]
+                        refs += [("secret", {"name": (v.get("secret") or {}).get("secretName"), "optional": (v.get("secret") or {}).get("optional")})
+                                 for v in ps.get("volumes") or []]
+                        for c in _containers(ps):
+                            for e in c.get("env") or []:
+                                vf = e.get("valueFrom") or {}
+                                refs += [("configmap", vf.get("configMapKeyRef") or {}), ("secret", vf.get("secretKeyRef") or {})]
+                            for ef in c.get("envFrom") or []:
+                                refs += [("configmap", ef.get("configMapRef") or {}), ("secret", ef.get("secretRef") or {})]
+                        broken |= {f'{k} "{r["name"]}" not found (référencé par {d["kind"]}/{d["metadata"]["name"]})'
+                                   for k, r in refs if r.get("name") and not r.get("optional") and (k, r["name"]) not in defined_refs}
+                orphans = _orphan_services(docs)
+                if orphans and known_selector_fix(src, mdir):
+                    raise _Failure("manifests", "Services sans pod correspondant (aucun endpoint) :\n- " + "\n- ".join(orphans))
+                if broken:
+                    ref_diag = "Références vers des objets absents des manifests :\n- " + "\n- ".join(sorted(broken))
+                    if known_reference_fix(src, mdir, ref_diag):      # réalignables : on corrige la branche
+                        raise _Failure("manifests", ref_diag)
                 if dangling:
                     raise _Failure("manifests", "Ingress vers des services absents des manifests :\n- " + "\n- ".join(dangling)
                                    + f"\nServices rendus : {', '.join(sorted(svc_names)) or 'aucun'}.")
@@ -1530,6 +1882,9 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
                     raise _Failure("manifests", f"`kubectl apply` a refusé les manifests :\n{ap.stderr.strip()[-2500:]}")
                 say("apply", f"{len([l for l in ap.stdout.splitlines() if l.strip()])} objet(s) appliqué(s) dans {ns}")
                 names = [(d["kind"], d["metadata"]["name"]) for d in docs if d["kind"] in WORKLOADS]
+                if any(k == "StatefulSet" for k, _ in names):
+                    time.sleep(3)                                 # le contrôleur calcule la nouvelle révision
+                    _recreate_stuck_statefulset_pods(kube, ns, say)
                 def _on_state(states: list, pods: list) -> None:
                     result.workloads, result.pods = states, pods
                     snap(stage="rollout")
@@ -1541,8 +1896,8 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
                     raise _Failure("rollout", _diagnose(kube, ns, states, pods))
                 flaky = _probe_rejections(kube, ns, pods, t_roll)
                 if flaky:
-                    say("rollout", f"{len(flaky)} pod(s) refusent leurs sondes de santé (HTTP 429) : l'appli n'est pas stable")
-                    raise _Failure("rollout", "Sondes HTTP refusées par l'application (HTTP 429, limitation de débit) :\n"
+                    say("rollout", f"{len(flaky)} pod(s) échouent à leurs sondes de santé (HTTP 429/5xx) : l'appli n'est pas stable")
+                    raise _Failure("rollout", "Sondes HTTP en échec (429 : limitation de débit ; 502/503/504 : la route de santé passe par un autre service) :\n"
                                    + "\n".join(flaky))
                 mon_ok, mon_msg = _apply_monitoring(kube, src, ns, slug)
                 if mon_msg:
@@ -1554,11 +1909,32 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
             except _Failure as f:
                 result.failed_stage, result.diagnostic = f.stage, f.diagnostic
                 say("repair" if attempt < max_repairs else f.stage, f"échec ({f.stage}) : {str(f).splitlines()[0][:160]}")
+                snap(stage="repair", attempt=attempt)          # l'échec s'affiche tout de suite, pas après la réparation
                 if attempt >= max_repairs:
                     break
                 attempt += 1
                 fix = None
                 if f.stage == "build" and f.build is not None:
+                    ctx = known_context_fix(src, f.build, f.diagnostic)
+                    if ctx:
+                        ctx_override[f.build.dockerfile] = ctx
+                        result.repairs.append({"attempt": attempt, "stage": "build", "files": [], "commit": None,
+                                               "model": "règle déterministe",
+                                               "explanation": f"Contexte de build de {f.build.dockerfile} corrigé : "
+                                                              f"{f.build.context} → {ctx} (les fichiers copiés sont là)."})
+                        say("repair", f"réparation {attempt}/{max_repairs} : les fichiers copiés existent, c'est le contexte de "
+                                      f"build qui était faux ({f.build.context} → {ctx}) · nouvel essai sans toucher au Dockerfile")
+                        snap(stage="repair", attempt=attempt)
+                        continue
+                if f.stage == "build" and f.build is not None:
+                    got = known_dockerignore_fix(src, f.build, f.diagnostic)
+                    if got:
+                        fix = {"explanation": f"Règle connue : le .dockerignore du contexte excluait des fichiers copiés par "
+                                              f"{f.build.dockerfile} ({', '.join(got[1])}) ; ajout de {f.build.dockerfile}.dockerignore, "
+                                              f"propre à ce Dockerfile.", "files": got[0], "model": "règle déterministe"}
+                        say("repair", f"réparation {attempt}/{max_repairs} : erreur connue (.dockerignore qui exclut des fichiers "
+                                      f"copiés), correctif appliqué sans appel au modèle")
+                if fix is None and f.stage == "build" and f.build is not None:
                     files = known_build_fix(src, f.build, f.diagnostic)
                     if files:
                         fix = {"explanation": "Règle connue : fichier(s) absent(s) du dépôt retiré(s) des instructions COPY "
@@ -1568,7 +1944,7 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
                 if fix is None and f.stage == "rollout":
                     # Les règles de démarrage se cumulent : chacune part des fichiers déjà corrigés par la précédente.
                     rule_files, rule_notes = {}, []
-                    for rule in (known_rollout_fix, known_reference_fix, known_postgres_fix, known_probe_fix):
+                    for rule in (known_rollout_fix, known_reference_fix, known_postgres_fix, known_probe_fix, known_nginx_conf_fix):
                         got = rule(src, mdir, f.diagnostic)
                         if got:
                             for rel, content in got[0].items():
@@ -1579,7 +1955,9 @@ def run_deploy(name: str, *, out_root: Path = Path("out"), backend: str | None =
                         fix = {"explanation": "Règles connues : " + " ; ".join(rule_notes), "files": rule_files, "model": "règle déterministe"}
                         say("repair", f"réparation {attempt}/{max_repairs} : {len(rule_notes)} erreur(s) connue(s) au démarrage, correctif appliqué sans appel au modèle")
                 if fix is None and f.stage == "manifests":
-                    known = known_manifest_fix(src, mdir) or known_ingress_fix(src, mdir)
+                    known = (known_manifest_fix(src, mdir) or known_ingress_fix(src, mdir)
+                             or known_volume_fix(src, mdir, f.diagnostic) or known_reference_fix(src, mdir, f.diagnostic)
+                             or known_selector_fix(src, mdir))
                     if known:
                         fix = {"explanation": "Règle connue : " + " ; ".join(known[1]), "files": known[0], "model": "règle déterministe"}
                         say("repair", f"réparation {attempt}/{max_repairs} : erreur connue dans les manifests, correctif appliqué sans appel au modèle")

@@ -424,11 +424,23 @@ def _http_json(url: str, body: dict, headers: dict, label: str) -> dict:
         except BaseException as e:  # noqa: BLE001 — relancée plus bas, dans le fil de la tâche
             box["err"] = e
 
-    worker = threading.Thread(target=work, daemon=True)
-    worker.start()
-    while worker.is_alive():
-        worker.join(0.5)
-        cancel.check()
+    import time
+
+    # Surcharge passagère (502, 503, 504, 529) : deux nouveaux essais espacés avant d'abandonner.
+    for attempt in range(3):
+        box.clear()
+        worker = threading.Thread(target=work, daemon=True)
+        worker.start()
+        while worker.is_alive():
+            worker.join(0.5)
+            cancel.check()
+        err = box.get("err")
+        if isinstance(err, urllib.error.HTTPError) and err.code in (502, 503, 504, 529) and attempt < 2:
+            for _ in range(20 * (attempt + 1)):          # 10 s puis 20 s, en restant interruptible
+                time.sleep(0.5)
+                cancel.check()
+            continue
+        break
     try:
         if "err" in box:
             raise box["err"]
