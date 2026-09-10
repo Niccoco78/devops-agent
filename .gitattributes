@@ -1,0 +1,6 @@
+# Fins de ligne Unix dans le dépôt et à l'extraction : le Dockerfile, les scripts et le code
+# tournent dans une image Linux, même quand le dépôt est cloné sous Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

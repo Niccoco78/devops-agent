@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent DevOps</title>
+<style>
+  /* Sobre : un fond neutre, une seule couleur d'accent, les couleurs d'état seulement sur de petits points. */
+  :root{
+    --bg:#f6f6f3; --panel:#ffffff; --sunk:#f0f0ec; --line:#e4e4de; --line2:#d6d6cf;
+    --ink:#1d1e20; --muted:#686c73; --faint:#a3a7ad;
+    --accent:#2f6fec; --accent-ink:#ffffff; --soft:#eaf0fe;
+    --ok:#1e9e63; --warn:#d27b12; --mid:#c9a227; --ko:#d9463f;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0e1013; --panel:#15181d; --sunk:#111419; --line:#232830; --line2:#2e343d;
+    --ink:#e6e8eb; --muted:#9aa1ab; --faint:#5d646e;
+    --accent:#6a9bff; --accent-ink:#0b1020; --soft:#16213a;
+    --ok:#39c98a; --warn:#e89a3c; --mid:#d8b64a; --ko:#ef6b63;
+  }}
+  *{box-sizing:border-box}
+  /* Une seule barre de défilement, celle de la page : fine, sans flèches. */
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-button{display:none;width:0;height:0}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:var(--line2);border-radius:10px;border:3px solid var(--bg)}
+  ::-webkit-scrollbar-thumb:hover{background:var(--faint)}
+  @supports not selector(::-webkit-scrollbar){html{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+  a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  [hidden]{display:none!important}
+  button{font:inherit;cursor:pointer;border-radius:8px;border:1px solid transparent;padding:8px 15px;background:var(--accent);color:var(--accent-ink);font-weight:550;font-size:14px}
+  button:hover{filter:brightness(1.07)}
+  button:disabled{opacity:.5;cursor:not-allowed;filter:none}
+  button.ghost{background:transparent;color:var(--ink);border-color:var(--line2)}
+  button.ghost:hover{background:var(--sunk)}
+  button.link{background:none;border:0;color:var(--muted);padding:8px 6px;font-weight:500}
+  button.link:hover{color:var(--ink);filter:none}
+  button.danger{background:transparent;color:var(--ko);border-color:color-mix(in srgb,var(--ko) 40%,transparent)}
+  input,select{font:inherit;font-size:14px;color:var(--ink);background:var(--panel);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;width:100%;min-width:0}
+  input:focus,select:focus,button:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid color-mix(in srgb,var(--accent) 55%,transparent);outline-offset:1px}
+  details>summary{cursor:pointer;list-style:none} details>summary::-webkit-details-marker{display:none}
+  .muted{color:var(--muted)} .small{font-size:13px}
+
+  /* ---------- barre ---------- */
+  .bar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:14px;height:54px;padding:0 20px;
+    background:color-mix(in srgb,var(--bg) 85%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:650;letter-spacing:-.01em}
+  .brand i{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  .bar .sp{flex:1}
+  .bar .cl{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}
+  .bar button{padding:6px 11px;font-size:13.5px}
+
+  /* ---------- colonne ---------- */
+  main{max-width:820px;margin:0 auto;padding:28px 20px 140px}
+  .composer{margin:9vh 0 34px;transition:margin .3s}
+  .composer h1{font-size:30px;line-height:1.2;letter-spacing:-.02em;font-weight:650;margin:0 0 8px}
+  .composer>p{margin:0 0 22px;color:var(--muted);max-width:60ch}
+  .cmd{display:grid;grid-template-columns:1fr 230px auto;gap:8px}
+  .cmd input,.cmd select,.cmd button{height:44px}
+  .cmd button{padding:0 20px}
+  .opts{margin-top:10px;font-size:13px;color:var(--muted)}
+  .opts summary{display:inline-block}
+  .opts .row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:8px}
+  .opts select{width:auto} .opts input[type=checkbox]{width:auto}
+  .recent{margin-top:34px}
+  .recent h4{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+  .rec{display:flex;justify-content:space-between;gap:12px;width:100%;text-align:left;background:none;color:var(--ink);border:0;border-top:1px solid var(--line);border-radius:0;padding:11px 2px;font-weight:500}
+  .rec:hover{background:none;color:var(--accent);filter:none}
+  .rec span{color:var(--muted);font-weight:400;font-size:13px;text-align:right}
+  .mrow{display:flex;align-items:center;border-top:1px solid var(--line)}
+  .mrow .rec{border-top:0;flex:1;min-width:0}
+  .mrow .del{color:var(--faint);padding:8px 4px 8px 12px;font-size:13px;opacity:0;transition:opacity .15s}
+  .mrow:hover .del,.mrow .del:focus-visible{opacity:1}
+  .mrow .del:hover{color:var(--ko)}
+  @media (hover:none){.mrow .del{opacity:1}}
+  body.active .composer{margin:4px 0 8px}
+  body.active .composer h1,body.active .composer>p,body.active .recent{display:none}
+
+  /* ---------- fil des étapes ---------- */
+  .stage{position:relative;padding:22px 0 6px 46px}
+  .stage::before{content:"";position:absolute;left:14px;top:56px;bottom:-22px;width:1px;background:var(--line)}
+  .stage:last-child::before{display:none}
+  .st-num{position:absolute;left:0;top:22px;width:29px;height:29px;border-radius:50%;border:1px solid var(--line2);display:grid;place-items:center;
+    font-size:13px;font-weight:600;color:var(--muted);background:var(--bg)}
+  .stage.run .st-num{border-color:var(--accent);color:var(--accent);animation:ring 1.8s ease-out infinite}
+  .stage.done .st-num{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+  .stage.fail .st-num{border-color:var(--ko);color:var(--ko)}
+  .st-head{display:flex;align-items:baseline;gap:14px}
+  .st-head h2{margin:0;font-size:18px;font-weight:620;letter-spacing:-.01em;white-space:nowrap}
+  .st-sub{margin:0;color:var(--muted);font-size:13.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .st-t{display:flex;align-items:baseline;gap:10px;min-width:0;flex:1}
+  .st-state{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:7px;white-space:nowrap}
+  .steps{list-style:none;display:flex;flex-wrap:wrap;margin:8px 0 12px;padding:0;font-size:12.5px;color:var(--faint)}
+  .steps:empty{display:none}
+  .steps li{display:flex;align-items:center}
+  .steps li+li::before{content:"›";margin:0 8px;color:var(--line2)}
+  .steps li.done{color:var(--muted)}
+  .steps li.now{color:var(--accent);font-weight:550}
+  .steps li.now::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);margin-left:6px;animation:blink 1s infinite}
+  .steps li.ko{color:var(--ko);font-weight:550}
+
+  /* le direct : les dernières actions de l'agent, la plus récente en clair */
+  .live{font:13px/1.7 var(--mono);margin:2px 0 14px}
+  .ln{display:flex;gap:14px;color:var(--faint);min-width:0}
+  .ln .t{flex:0 0 58px;text-align:right;opacity:.8}
+  .ln .m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ln.now{color:var(--ink)}
+  .ln.now .m::after{content:"▍";color:var(--accent);margin-left:3px;animation:blink 1s steps(1) infinite}
+  .live .ln:nth-last-child(n+4){opacity:.55}
+
+  .viz{display:flex;flex-direction:column;gap:14px;margin-bottom:14px}
+  .viz:empty{display:none}
+  .lbl{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin:0 0 6px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font:12px var(--mono);background:var(--sunk);border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}
+  .rows{display:flex;flex-direction:column}
+  .r{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line);font-size:14px;min-width:0}
+  .r:first-child{border-top:0}
+  .r .ic{flex:0 0 16px;display:grid;place-items:center;font-size:12px;color:var(--faint)}
+  .r .nm{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .r code.nm{font-size:13px}
+  .r .rt{margin-left:auto;color:var(--muted);font-size:13px;white-space:nowrap;display:flex;align-items:center;gap:8px}
+  .ic.ok{color:var(--ok)} .ic.ko{color:var(--ko)} .ic.acc{color:var(--accent)} .ic.ink{color:var(--ink)}
+  .grp+.grp{margin-top:10px}
+  .grp-h{display:flex;justify-content:space-between;font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);margin-bottom:2px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:12px}
+  .card h3{margin:0;font-size:17px;font-weight:620;letter-spacing:-.01em}
+  .card-h{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .lead{margin:6px 0 10px;color:var(--muted)}
+  .facts{display:flex;flex-wrap:wrap;gap:6px 18px;margin:4px 0 12px;font-size:13.5px;color:var(--muted)}
+  .facts span{display:flex;align-items:center;gap:6px}
+  .actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:0 0 8px;background:var(--faint)}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.mid{background:var(--mid)} .dot.ko{background:var(--ko)} .dot.acc{background:var(--accent)}
+  .risk{border-top:1px solid var(--line)}
+  .risk summary{display:flex;align-items:center;gap:10px;padding:9px 0;font-size:14.5px}
+  .risk summary span{flex:1}
+  .risk summary em{font-style:normal;font-size:12.5px;color:var(--faint)}
+  .risk[open] summary{font-weight:550}
+  .rk{padding:0 0 12px 18px;font-size:14px;color:var(--muted)}
+  .rk p{margin:0 0 6px} .rk b{color:var(--ink);font-weight:550}
+  .more{margin-top:8px;font-size:13.5px}
+  .more summary{color:var(--muted)} .more summary:hover{color:var(--ink)}
+  .more summary::before{content:"+ ";color:var(--faint)} .more[open] summary::before{content:"− "}
+  .more[open] summary{margin-bottom:8px}
+  .more ul,.more ol{margin:0;padding-left:20px;color:var(--muted)}
+  pre.diag{margin:0;font:12px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:12px;color:var(--muted)}
+  .note{font-size:13.5px;color:var(--muted);background:var(--sunk);border-radius:8px;padding:10px 12px;margin:10px 0 0}
+  .note.warn{color:var(--warn)} .note.ko{color:var(--ko)}
+  .checks{display:flex;flex-direction:column;margin:6px 0 12px}
+  .check{display:flex;gap:10px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:14px;cursor:pointer}
+  .check input{width:auto;margin:0}
+  .field{display:flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted);margin-top:8px}
+  .grid2{display:grid;grid-template-columns:160px 1fr;gap:8px}
+  .golink{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--soft);border-radius:10px;padding:14px 16px;margin:0 0 12px;font-weight:600;color:var(--accent)}
+  .golink span{font:13.5px var(--mono);font-weight:500}
+  .golink:hover{text-decoration:none;filter:brightness(1.03)}
+  .pods{display:flex;gap:4px}
+  .pods i{width:7px;height:7px;border-radius:50%;background:var(--warn)}
+  .pods i.ok{background:var(--ok)} .pods i.ko{background:var(--ko)}
+  .creds td{padding:2px 14px 2px 0;font:12.5px var(--mono)} .creds td:first-child{color:var(--muted)}
+  .journal{margin:2px 0 8px;font-size:13px}
+  .journal summary{color:var(--faint)} .journal summary:hover{color:var(--muted)}
+  .journal pre{margin:8px 0 0;font:12px/1.6 var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--muted);background:var(--sunk);border-radius:8px;padding:12px}
+
+  .stop{padding:0 0 0 8px;color:var(--muted);font-size:13px;font-weight:500}
+  .stop:hover{color:var(--ko)}
+  .check b{font-weight:550}
+  .spin{width:11px;height:11px;border:1.5px solid var(--accent);border-right-color:transparent;border-radius:50%;display:inline-block;animation:rot .8s linear infinite}
+  .pulse{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;animation:blink 1s infinite}
+
+  /* apparition progressive : chaque élément arrive à son tour */
+  .in{animation:rise .38s ease both;animation-delay:calc(var(--i,0) * 70ms)}
+  .stagger>*{animation:rise .38s ease both;animation-delay:calc(var(--i,0) * 70ms)}
+
+  .follow{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:25;background:var(--panel);color:var(--ink);border:1px solid var(--line2);
+    box-shadow:0 6px 24px rgba(0,0,0,.12);border-radius:999px;padding:8px 16px;font-size:13.5px}
+  .follow:hover{filter:none;background:var(--sunk)}
+
+  /* ---------- tiroir ---------- */
+  .shade{position:fixed;inset:0;z-index:40;background:rgba(10,12,16,.28)}
+  .drawer{position:fixed;top:0;right:0;bottom:0;z-index:41;width:min(460px,100%);background:var(--panel);border-left:1px solid var(--line);
+    overflow-y:auto;padding:18px 22px 40px;animation:slide .25s ease}
+  .drawer-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .drawer-h h3{margin:0;font-size:17px;font-weight:620}
+  .drawer section+section{margin-top:26px}
+  .drawer .lbl{margin-bottom:8px}
+  .toasts{position:fixed;left:20px;bottom:20px;z-index:50;display:flex;flex-direction:column;gap:8px}
+  .toast{background:var(--ink);color:var(--bg);border-radius:9px;padding:9px 14px;font-size:13.5px;max-width:380px;animation:rise .25s ease}
+  .toast.ko{background:var(--ko);color:#fff}
+
+  @keyframes rise{from{opacity:0;transform:translateY(5px)}}
+  @keyframes blink{50%{opacity:.25}}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  @keyframes slide{from{transform:translateX(24px);opacity:0}}
+  @keyframes ring{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 35%,transparent)}100%{box-shadow:0 0 0 9px transparent}}
+  @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+  @media (max-width:640px){.cmd{grid-template-columns:1fr}.stage{padding-left:38px}.bar .cl,.bar [data-act=new]{display:none}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header class="bar">
+  <span class="brand"><i></i>Agent DevOps</span>
+  <span class="sp"></span>
+  <button class="link" data-act="new">Nouvelle analyse</button>
+  <button class="ghost" data-act="drawer" data-d="missions">Missions</button>
+  <button class="ghost" data-act="drawer" data-d="settings">Réglages</button>
+</header>
+
+<main>
+  <section class="composer" id="composer">
+    <h1>Quel dépôt analyser ?</h1>
+    <p>L'agent lit le dépôt, repère les risques, construit l'usine logicielle, la déploie sur votre cluster et la publie. Chaque étape s'écrit ici, en direct.</p>
+    <form class="cmd" id="cmd" autocomplete="off">
+      <input id="target" type="text" placeholder="https://gitlab.com/groupe/projet" spellcheck="false" aria-label="URL du dépôt">
+      <select id="model" aria-label="Modèle d'IA"></select>
+      <button type="submit" id="go">Analyser</button>
+    </form>
+    <details class="opts"><summary>Options</summary>
+      <div class="row">
+        <label>Profondeur <select id="depth"><option>3</option><option selected>4</option><option>5</option><option>6</option></select></label>
+        <label>Budget <select id="budget"><option value="40000">40 k</option><option value="80000" selected>80 k</option><option value="120000">120 k</option></select></label>
+        <label><input id="refresh" type="checkbox"> recloner</label>
+      </div>
+    </details>
+    <div class="recent" id="recent"></div>
+  </section>
+  <div id="stream"></div>
+</main>
+
+<button class="follow" id="follow" data-act="follow" hidden>↓ Suivre en direct</button>
+<div class="shade" id="shade" data-act="close" hidden></div>
+<aside class="drawer" id="drawer" hidden role="dialog" aria-modal="true"></aside>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+(() => {
+  "use strict";
+  // ============================================================ outils
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const h = html => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+  async function GET(p) {
+    const r = await fetch(p, { cache: "no-store" }); const txt = await r.text(); let j;
+    try { j = JSON.parse(txt); } catch { j = txt; }
+    if (!r.ok) throw new Error((j && j.error) || r.statusText); return j;
+  }
+  async function POST(p, body = {}) {
+    const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+  }
+  /** N'écrit que si le contenu change : pas de clignotement, pas d'animation rejouée. */
+  function setHTML(el, html) { if (el && el._h !== html) { el.innerHTML = html; el._h = html; } }
+  /** Liste qui grandit : les éléments existants restent, seuls les nouveaux apparaissent (animés à la suite). */
+  function sync(box, items, key, make, update) {
+    if (box._h) { box.innerHTML = ""; box._h = null; }
+    const seen = new Set(); let n = 0;
+    items.forEach((it, i) => {
+      const k = String(key(it, i)); seen.add(k);
+      let el = null; for (const c of box.children) if (c.dataset.k === k) { el = c; break; }
+      if (!el) { el = make(it, i); el.dataset.k = k; el.classList.add("in"); el.style.setProperty("--i", n++); box.appendChild(el); }
+      if (update) update(el, it, i);
+    });
+    [...box.children].forEach(c => { if (!seen.has(c.dataset.k)) c.remove(); });
+  }
+  const errNote = j => `<p class="note${j.cancelled ? "" : " ko"}" style="margin:0">${esc(j.error)}</p>`;
+  const dur = t => { t = Math.max(0, Math.round(t || 0)); return t < 60 ? `${t} s` : `${Math.floor(t / 60)} min ${String(t % 60).padStart(2, "0")}`; };
+  const hostOf = u => { try { return new URL(u).pathname.replace(/^\//, "").replace(/\.git$/, ""); } catch { return u || ""; } };
+  const SEV = { critical: ["Critique", "ko"], high: ["Élevé", "warn"], medium: ["Moyen", "mid"], low: ["Faible", ""] };
+  const sev = s => SEV[s] || [s, ""];
+  function toast(msg, kind = "") { const t = h(`<div class="toast ${kind}">${esc(msg)}</div>`); $("#toasts").appendChild(t); setTimeout(() => t.remove(), 5000); }
+
+  // ============================================================ état
+  const blank = () => ({ analysis: null, fix: null, deploy: null, live: null, published: null });
+  const S = {
+    providers: [], targets: {}, defaultBackend: null, missions: [], forges: [], platform: null,
+    project: null, data: blank(), jobs: {}, ui: {}, drawer: null, follow: true, lastH: 0, provSel: null, forgeSel: "github",
+  };
+  const running = k => { const j = S.jobs[k]; return !!j && (j.status === "running" || j.status === "queued"); };
+  const anyRunning = () => ["analyze", "fix", "deploy", "publish"].some(running);
+  const lastStep = j => j && j.log && j.log.length ? j.log[j.log.length - 1].step : null;
+
+  // ============================================================ données
+  async function loadModels() {
+    try {
+      const m = await GET("/api/models");
+      S.providers = m.providers || []; S.targets = m.targets || {}; S.defaultBackend = m.default_backend;
+      fillModels();
+      clearTimeout(S.modelsRetry);
+      if (S.providers.some(p => p.models_loading)) S.modelsRetry = setTimeout(loadModels, 8000);
+    } catch (e) { toast("Serveur injoignable : " + e.message, "ko"); }
+  }
+  /** Le menu ne montre que des modèles réellement disponibles, fournisseur par fournisseur. */
+  function fillModels() {
+    const sel = $("#model"), prev = sel.value; sel.innerHTML = ""; let first = null, def = null;
+    for (const p of S.providers.filter(x => x.configured)) {
+      const g = document.createElement("optgroup"); g.label = p.label.split(" (")[0];
+      if (!p.models.length) {
+        const o = new Option(p.models_loading ? "chargement des modèles…" : p.models_error ? "indisponible : " + p.models_error : "aucun modèle", "");
+        o.disabled = true; g.appendChild(o);
+      }
+      for (const id of p.models) {
+        const o = new Option(id, p.id + "|" + id); g.appendChild(o);
+        first = first || o.value; if (p.id === S.defaultBackend && !def) def = o.value;
+      }
+      sel.appendChild(g);
+    }
+    sel.appendChild(new Option("＋ Ajouter une clé API…", "__add"));
+    sel.value = [...sel.options].some(o => o.value === prev && o.value && o.value !== "__add") ? prev : (def || first || "");
+    sel.dataset.prev = sel.value;
+  }
+  async function loadMissions() { try { S.missions = await GET("/api/reports"); } catch { S.missions = []; } }
+  async function loadForges() { try { S.forges = await GET("/api/git"); } catch { S.forges = []; } }
+  async function loadLive() {
+    if (!S.project || running("deploy")) return;
+    const m = S.missions.find(x => x.name === S.project);
+    if (!m || !(m.deployment && m.deployment.deployed)) return;
+    try { S.data.live = await GET("/api/cluster?name=" + encodeURIComponent(S.project)); render(); } catch { /* cluster arrêté */ }
+  }
+  async function openMission(name) {
+    S.project = name; S.ui = {}; S.data = blank();
+    for (const k of ["analyze", "fix", "deploy", "publish"]) if (!running(k)) delete S.jobs[k];
+    $("#stream").innerHTML = "";
+    await loadMissions();
+    const m = S.missions.find(x => x.name === name) || {};
+    S.data.published = m.published || null;
+    try {
+      const [data, meta] = await Promise.all([GET(`/reports/${name}/analysis.json`), GET(`/reports/${name}/meta.json`).catch(() => ({}))]);
+      S.data.analysis = { name, data, files: m.files || {}, model: meta.model, context: meta.context, source: meta.target, key_files: meta.key_files || [] };
+      if (meta.target) $("#target").value = meta.target;
+    } catch { /* analyse illisible */ }
+    if (m.remediated) {
+      try {
+        const ch = await GET(`/reports/${name}/remediation/changes.json`);
+        S.data.fix = { ...ch, files: { "REMEDIATION.md": `/reports/${name}/remediation/REMEDIATION.md`, "patch.diff": `/reports/${name}/remediation/patch.diff` } };
+      } catch { /* remédiation illisible */ }
+    }
+    if (m.deployment && m.deployment.deployed) {
+      S.data.deploy = { ok: m.deployment.ok, url: m.deployment.url, namespace: m.deployment.namespace,
+                        files: { "DEPLOYMENT.md": `/reports/${name}/deploy/DEPLOYMENT.md` } };
+    }
+    S.follow = false; closeDrawer(); render(); window.scrollTo(0, 0); loadLive();
+  }
+
+  // ============================================================ tâches de fond
+  const timers = {};
+  function watch(kind, id) {
+    clearInterval(timers[kind]); if (kind !== "platform") S.follow = true;
+    let misses = 0;
+    // Tâche perdue (serveur redémarré, conteneur reconstruit) : on le dit au lieu de tourner dans le vide.
+    const lost = msg => {
+      clearInterval(timers[kind]);
+      const j = S.jobs[kind] || { log: [] };
+      S.jobs[kind] = { ...j, status: "error", error: msg, cancelled: false, stopping: false };
+      toast(msg, "ko"); render();
+    };
+    const tick = async () => {
+      let j;
+      try { j = await GET("/api/jobs/" + id); misses = 0; }
+      catch (e) {
+        if (/inconnu|introuvable|not found/i.test(e.message)) return lost("Le serveur a redémarré : cette tâche a été interrompue. Relancez-la.");
+        if (++misses >= 20) lost("Serveur injoignable depuis 20 secondes : la tâche est considérée comme perdue.");
+        return;
+      }
+      S.jobs[kind] = j;
+      if (j.status === "done") { clearInterval(timers[kind]); await onDone(kind, j); }
+      else if (j.status === "error") { clearInterval(timers[kind]); toast(j.error || "Échec", j.cancelled ? "" : "ko"); }
+      render(); if (S.drawer === "platform") renderDrawer();
+    };
+    tick(); timers[kind] = setInterval(tick, 1000);
+  }
+  async function onDone(kind, j) {
+    const r = j.result || {};
+    if (kind === "analyze") {
+      S.project = r.name;
+      S.data.analysis = { name: r.name, data: r.data, files: r.files, model: r.model, context: r.context, source: r.source, key_files: (j.snapshot && j.snapshot.files) || [] };
+    } else if (kind === "fix") { S.data.fix = r; S.ui.fixSetup = false; }
+    else if (kind === "deploy") { S.data.deploy = r; S.data.live = null; }
+    else if (kind === "publish") { S.data.published = r; S.ui.publishSetup = false; toast(`Publié sur ${r.label}`); }
+    else if (kind === "platform") { toast("Observabilité mise à jour"); if (S.drawer === "settings") renderDrawer(); }
+    await loadMissions();
+    if (kind === "deploy") loadLive();
+  }
+  async function resume() {
+    try {
+      const jobs = await GET("/api/jobs");
+      for (const j of jobs.filter(x => x.status === "running" || x.status === "queued")) {
+        if (j.kind !== "platform" && j.kind !== "analyze") S.project = S.project || j.target;
+        watch(j.kind, j.id);
+      }
+    } catch { /* rien */ }
+  }
+
+  // ============================================================ actions
+  const modelParams = () => { const [backend, model] = ($("#model").value || "|").split("|"); return { backend: backend || null, model: model || null }; };
+  async function analyze() {
+    const target = $("#target").value.trim();
+    if (!target) { $("#target").focus(); toast("Indiquez l'URL d'un dépôt Git ou un chemin local", "ko"); return; }
+    for (const k of ["analyze", "fix", "deploy", "publish"]) if (!running(k)) delete S.jobs[k];
+    S.project = null; S.data = blank(); S.ui = {}; $("#stream").innerHTML = "";
+    try {
+      const r = await POST("/api/analyze", { target, ...modelParams(), refresh: $("#refresh").checked, depth: +$("#depth").value, budget: +$("#budget").value });
+      S.jobs.analyze = { status: "queued", log: [], params: { target } }; render(); watch("analyze", r.job_id);
+    } catch (e) { toast(e.message, "ko"); }
+  }
+  function reset() {
+    for (const k of ["analyze", "fix", "deploy", "publish"]) if (!running(k)) delete S.jobs[k];
+    if (anyRunning()) toast("Une tâche tourne encore : elle reste affichée");
+    S.project = null; S.data = blank(); S.ui = {}; $("#stream").innerHTML = ""; $("#target").value = "";
+    closeDrawer(); render(); window.scrollTo(0, 0); $("#target").focus();
+  }
+  const ACT = {
+    new: reset,
+    open: b => openMission(b.dataset.name),
+    follow: () => { S.follow = true; S.lastH = 0; follow(); },
+    drawer: b => openDrawer(b.dataset.d),
+    close: closeDrawer,
+    "fix-setup": () => { S.ui.fixSetup = true; S.follow = true; S.lastH = 0; render(); scrollToStage("factory"); },
+    "fix-cancel": () => { S.ui.fixSetup = false; render(); },
+    "fix-rebuild": () => { S.data.fix = null; delete S.jobs.fix; S.ui.fixSetup = true; render(); scrollToStage("factory"); },
+    "fix-go": async () => {
+      const risks = $$("#fix-risks input:checked").map(i => +i.value);
+      if (!risks.length) { toast("Cochez au moins un risque", "ko"); return; }
+      try {
+        const r = await POST("/api/fix", { name: S.project, risks, target_kind: $("#target-kind").value, ...modelParams() });
+        S.data.fix = null; S.jobs.fix = { status: "queued", log: [], params: { name: S.project } }; render(); watch("fix", r.job_id);
+      } catch (e) { toast(e.message, "ko"); }
+    },
+    "deploy-setup": async () => {
+      S.ui.deploySetup = true; S.clusters = null; render(); scrollToStage("cluster");
+      try { S.clusters = await GET("/api/clusters"); } catch (e) { S.clusters = []; toast(e.message, "ko"); }
+      render();
+    },
+    "deploy-cancel": () => { S.ui.deploySetup = false; render(); },
+    "deploy-go": async () => {
+      const kind = ($("input[name=cl-kind]:checked") || {}).value;
+      if (!kind) { toast("Choisissez un cluster", "ko"); return; }
+      try {
+        const r = await POST("/api/deploy", { name: S.project, cluster: kind, observability: $("#cl-obs").checked, ...modelParams() });
+        S.ui.deploySetup = false;
+        S.data.deploy = null; S.data.live = null; S.jobs.deploy = { status: "queued", log: [], params: { name: S.project } }; render(); watch("deploy", r.job_id);
+      } catch (e) { toast(e.message, "ko"); }
+    },
+    undeploy: async () => {
+      if (!confirm("Retirer l'application du cluster local ?\nLe namespace et ses données sont supprimés ; la branche corrigée reste.")) return;
+      try { const r = await POST("/api/undeploy", { name: S.project }); toast(`Namespace ${r.namespace} supprimé`); S.data.deploy = null; S.data.live = null; delete S.jobs.deploy; await loadMissions(); render(); }
+      catch (e) { toast(e.message, "ko"); }
+    },
+    "publish-setup": async () => { await loadForges(); S.ui.publishSetup = true; render(); scrollToStage("publish"); },
+    "publish-cancel": () => { S.ui.publishSetup = false; render(); },
+    "publish-go": async () => {
+      const platform = $("#pub-forge").value, repo = $("#pub-repo").value.trim(), priv = $("#pub-private").checked;
+      const label = platform === "github" ? "GitHub" : "GitLab";
+      const f = S.forges.find(x => x.id === platform);
+      if (!f || !f.configured) { toast(`Ajoutez d'abord un jeton ${label}`, "ko"); S.forgeSel = platform; openDrawer("settings"); return; }
+      if (!/^[A-Za-z0-9._-]{1,90}$/.test(repo)) { toast("Nom de dépôt invalide : lettres, chiffres, . _ -", "ko"); return; }
+      if (!confirm(`Publier sur ${label} ?\n\n• dépôt ${priv ? "privé" : "PUBLIC"} « ${repo} » créé sur votre compte (ou réutilisé)\n• branche de base et branche corrigée poussées\n• ${platform === "github" ? "pull request" : "merge request"} ouverte : le pipeline démarre\n\nRien n'est fusionné automatiquement.`)) return;
+      try { const r = await POST("/api/publish", { name: S.project, platform, repo, private: priv }); S.jobs.publish = { status: "queued", log: [] }; S.ui.publishSetup = false; render(); watch("publish", r.job_id); }
+      catch (e) { toast(e.message, "ko"); }
+    },
+    "open-settings": () => openDrawer("settings"),
+    cancel: async b => {
+      const j = S.jobs[b.dataset.kind]; if (!j || !j.id) return;
+      try { await POST(`/api/jobs/${j.id}/cancel`); j.stopping = true; render(); } catch (e) { toast(e.message, "ko"); }
+    },
+    "mission-delete": async b => {
+      const name = b.dataset.name, m = S.missions.find(x => x.name === name) || { project: name };
+      if (!confirm(`Supprimer définitivement « ${m.project} » ?\n\nL'analyse, l'usine (branche locale comprise) et l'appli déployée sur le cluster sont supprimées. Action irréversible.`)) return;
+      try {
+        const r = await POST("/api/missions/delete", { name });
+        toast(`Mission « ${m.project} » supprimée`); (r.errors || []).forEach(e => toast(e, "ko"));
+        await loadMissions();
+        if (S.project === name) reset(); else { render(); renderDrawer(); }
+      } catch (e) { toast(e.message, "ko"); }
+    },
+    "obs-remove": async b => {
+      if (!confirm("Retirer l'observabilité de ce cluster (Prometheus, Grafana, Loki, Alloy) ?")) return;
+      try { const r = await POST("/api/platform", { action: "uninstall", cluster: b.dataset.cluster }); watch("platform", r.job_id); toast("Retrait en cours…"); }
+      catch (e) { toast(e.message, "ko"); }
+    },
+    "k3s-delete": async () => {
+      if (!confirm("Supprimer le cluster k3s et tout ce qu'il contient ?\n\nIl sera recréé au prochain déploiement sur k3s.")) return;
+      try { await POST("/api/clusters/delete", { id: "k3s" }); toast("Cluster k3s supprimé"); renderDrawer(); }
+      catch (e) { toast(e.message, "ko"); }
+    },
+    "clear-all": clearAll,
+    "prov-save": () => provSave(), "prov-refresh": () => provRefresh(), "prov-default": () => provSave({ set_default: true }), "prov-clear": provClear, "prov-test": provTest,
+    "forge-save": forgeSave, "forge-test": forgeTest, "forge-clear": forgeClear,
+  };
+  document.addEventListener("click", e => {
+    const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
+    const fn = ACT[b.dataset.act]; if (fn) { e.preventDefault(); fn(b); }
+  });
+  document.addEventListener("change", e => {
+    if (e.target.id === "model") {
+      if (e.target.value === "__add") { e.target.value = e.target.dataset.prev || ""; openDrawer("settings"); }
+      else e.target.dataset.prev = e.target.value;
+    }
+    if (e.target.id === "target-kind") { const d = $("#target-desc"); if (d) d.textContent = S.targets[e.target.value] || ""; }
+    if (e.target.id === "prov-sel") { S.provSel = e.target.value; renderDrawer(); }
+    if (e.target.id === "forge-sel") { S.forgeSel = e.target.value; renderDrawer(); }
+  });
+  $("#cmd").addEventListener("submit", e => { e.preventDefault(); analyze(); });
+  function scrollToStage(id) { requestAnimationFrame(() => { const e = document.getElementById("st-" + id); if (e) e.scrollIntoView({ behavior: "smooth", block: "start" }); }); }
+  async function clearAll() {
+    if (!confirm("Supprimer tous les dépôts clonés et toutes les analyses, et retirer du cluster les applis déployées ?\n\nLes clés, jetons et la plateforme sont conservés. Action irréversible.")) return;
+    try {
+      const j = await POST("/api/cache/clear");
+      toast(`${j.clones_removed} dépôt(s), ${j.reports_removed} analyse(s)${j.apps_removed ? `, ${j.apps_removed} appli(s)` : ""} supprimés`);
+      (j.errors || []).forEach(e => toast(e, "ko"));
+      S.jobs = {}; await loadMissions(); reset();
+    } catch (e) { toast(e.message, "ko"); }
+  }
+
+  // ============================================================ rendu
+  function render() {
+    document.body.classList.toggle("active", !!(S.project || anyRunning()));
+    renderBar(); renderRecent(); renderStream(); follow();
+  }
+  function renderBar() { /* plus d'indicateur de cluster dans la barre : inutile et distrayant */ }
+  const badges = m => [`${m.risks} risques`, m.remediated ? "usine" : "", m.deployment && m.deployment.deployed ? (m.deployment.ok ? "en ligne" : "déploiement en échec") : "", m.published ? m.published.label : "", m.date].filter(Boolean).join(" · ");
+  const missionRows = list => list.map(m => `<div class="mrow"><button class="rec" data-act="open" data-name="${esc(m.name)}">${esc(m.project)}<span>${esc(badges(m))}</span></button><button class="link del" data-act="mission-delete" data-name="${esc(m.name)}" title="Supprimer définitivement cette mission" aria-label="Supprimer la mission ${esc(m.project)}">Supprimer</button></div>`).join("");
+  function renderRecent() {
+    const list = S.missions.slice(0, 5);
+    setHTML($("#recent"), list.length ? `<h4>Missions récentes</h4>` + missionRows(list) : "");
+  }
+
+  /** Le suivi : tant qu'une tâche tourne, la page glisse vers le bas au fil de ce qui s'écrit. */
+  function follow() {
+    const H = document.documentElement.scrollHeight;
+    if (S.follow && anyRunning() && H > S.lastH + 2) window.scrollTo({ top: H, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    S.lastH = H;
+    $("#follow").hidden = S.follow || !anyRunning();
+  }
+  const stopFollow = () => { if (anyRunning() && S.follow) { S.follow = false; $("#follow").hidden = false; } };
+  addEventListener("wheel", e => { if (e.deltaY < 0) stopFollow(); }, { passive: true });
+  addEventListener("touchmove", stopFollow, { passive: true });
+  addEventListener("keydown", e => { if (["PageUp", "ArrowUp", "Home"].includes(e.key) && !e.target.closest("input,select,textarea")) stopFollow(); });
+  addEventListener("scroll", () => {
+    if (!S.follow && anyRunning() && innerHeight + scrollY >= document.documentElement.scrollHeight - 30) { S.follow = true; $("#follow").hidden = true; }
+  }, { passive: true });
+
+  // ---------------------------------------------------------- squelette d'une étape
+  const ORDER = ["analysis", "factory", "cluster", "publish"];
+  function stage(id, num, title) {
+    let el = document.getElementById("st-" + id);
+    if (!el) {
+      el = h(`<section class="stage in" id="st-${id}">
+        <span class="st-num">${num}</span>
+        <header class="st-head"><div class="st-t"><h2>${title}</h2><p class="st-sub"></p></div><div class="st-state"></div></header>
+        <ol class="steps"></ol>
+        <div class="live" hidden></div><div class="viz"></div><div class="result"></div>
+        <details class="journal" hidden><summary></summary><pre></pre></details>
+      </section>`);
+      $(".journal", el).addEventListener("toggle", () => fillJournal(el));
+      $("#stream").appendChild(el);
+    }
+    return el;
+  }
+  const drop = id => { const e = document.getElementById("st-" + id); if (e) e.remove(); };
+  function keepOrder() {
+    const box = $("#stream"), cur = [...box.children].map(c => c.id.slice(3));
+    const want = ORDER.filter(id => cur.includes(id));
+    if (cur.join() !== want.join()) want.forEach(id => box.appendChild(document.getElementById("st-" + id)));
+  }
+  function status(el, kind, doneText, failed) {
+    const j = S.jobs[kind], run = running(kind), stopped = !run && !!j && !!j.cancelled;
+    const fail = !run && !stopped && (failed || (j && j.status === "error"));
+    el.classList.toggle("run", run); el.classList.toggle("fail", !!fail); el.classList.toggle("done", !run && !fail && !stopped && !!doneText);
+    const stop = run && j.id ? (j.stopping ? `<span class="muted">· arrêt…</span>` : `<button class="link stop" data-act="cancel" data-kind="${kind}">Arrêter</button>`) : "";
+    setHTML($(".st-state", el), run ? `<span class="pulse"></span>en cours · ${dur(j.elapsed)}${stop}` : stopped ? `<i class="dot"></i>arrêtée` : fail ? `<i class="dot ko"></i>échec` : esc(doneText || ""));
+  }
+  function steps(el, labels, idx, failed) {
+    setHTML($(".steps", el), labels.map((l, i) => `<li class="${failed && i === idx ? "ko" : i < idx ? "done" : i === idx ? "now" : ""}">${l}</li>`).join(""));
+  }
+  function live(el, kind) {
+    const box = $(".live", el), j = S.jobs[kind];
+    if (!j || !running(kind)) { box.hidden = true; box.innerHTML = ""; box._h = null; return; }
+    box.hidden = false;
+    const lines = (j.log || []).slice(-5);
+    if (!lines.length) { setHTML(box, `<div class="ln now"><span class="t">0 s</span><span class="m">démarrage…</span></div>`); return; }
+    sync(box, lines, l => l.t + "|" + l.msg, () => h(`<div class="ln"><span class="t"></span><span class="m"></span></div>`), (e, l, i) => {
+      $(".t", e).textContent = dur(l.t); $(".m", e).textContent = l.msg; e.title = l.msg; e.classList.toggle("now", i === lines.length - 1);
+    });
+  }
+  function fillJournal(el) {
+    const j = S.jobs[el.dataset.kind], d = $(".journal", el);
+    if (!j || !j.log || !j.log.length) { d.hidden = true; return; }
+    d.hidden = false;
+    $("summary", d).textContent = `Journal complet · ${j.log.length} lignes`;
+    if (d.open) $("pre", d).textContent = j.log.map(l => `${dur(l.t).padStart(9)}  ${l.msg}`).join("\n") + (j.error ? `\n\n✕ ${j.error}` : "");
+  }
+  function journal(el, kind) { el.dataset.kind = kind; fillJournal(el); }
+  function renderStream() { renderAnalysis(); renderFactory(); renderCluster(); renderPublish(); keepOrder(); }
+
+  // ---------------------------------------------------------- 1. analyse
+  function renderAnalysis() {
+    const j = S.jobs.analyze, d = S.data.analysis, run = running("analyze");
+    if (!j && !d) return drop("analysis");
+    const el = stage("analysis", "1", "Analyse"), snap = (j && j.snapshot) || {};
+    const failed = !!j && j.status === "error";
+    const keys = ["source", "explore", "prompt", "llm", "report"];
+    const idx = run || failed ? Math.max(0, keys.indexOf(lastStep(j))) : 5;
+    setHTML($(".st-sub", el), esc(hostOf((j && j.params && j.params.target) || (d && d.source) || "")));
+    status(el, "analyze", d ? (j && j.elapsed ? `terminée · ${dur(j.elapsed)}` : "terminée") : "");
+    steps(el, ["Source", "Exploration", "Prompt", "Modèle", "Rapport"], idx, failed);
+    live(el, "analyze");
+    // pendant l'analyse : les fichiers lus, puis les risques, au fur et à mesure
+    const viz = $(".viz", el);
+    if (run) {
+      if (!$(".files", viz)) viz.innerHTML = `<div class="files" hidden><p class="lbl">Fichiers lus</p><div class="chips"></div></div><div class="risks-live" hidden><p class="lbl">Risques repérés</p><div class="rows"></div></div>`;
+      const files = snap.files || [];
+      $(".files", viz).hidden = !files.length;
+      sync($(".files .chips", viz), files.slice(0, 18).concat(files.length > 18 ? [`+ ${files.length - 18}`] : []), f => f, f => h(`<span class="chip">${esc(f)}</span>`));
+      const risks = snap.risks || [];
+      $(".risks-live", viz).hidden = !risks.length;
+      sync($(".risks-live .rows", viz), risks, (r, i) => i + r.title, r => h(`<div class="r"><i class="dot ${sev(r.severity)[1]}"></i><span class="nm">${esc(r.title)}</span><span class="rt">${sev(r.severity)[0]}</span></div>`));
+    } else viz.innerHTML = "";
+    const res = $(".result", el);
+    if (failed) setHTML(res, `<div class="card">${errNote(j)}</div>`);
+    else if (d && !run) setHTML(res, analysisCard(d));
+    else setHTML(res, "");
+    journal(el, "analyze");
+  }
+  function analysisCard(d) {
+    const data = d.data || {}, p = data.project || {}, a = data.architecture || {}, risks = data.risks || [];
+    const n = s => risks.filter(r => r.severity === s).length, pl = (k, w) => `${k} ${w}${k > 1 ? "s" : ""}`;
+    const busy = S.ui.fixSetup || S.data.fix || S.jobs.fix;
+    return `<div class="card">
+      <div class="card-h"><h3>${esc(p.name || S.project)}</h3><span class="muted small">${esc((p.main_technologies || []).slice(0, 5).join(" · "))}</span></div>
+      <p class="lead">${esc(p.purpose)}</p>
+      <p class="facts"><span>${pl((a.components || []).length, "composant")}</span><span><i class="dot ko"></i>${pl(n("critical"), "critique")}</span><span><i class="dot warn"></i>${pl(n("high"), "élevé")}</span><span><i class="dot mid"></i>${pl(n("medium") + n("low"), "autre")}</span></p>
+      <div class="stagger">${risks.map((r, i) => {
+        const rec = r.recommendation || r.mitigation || r.fix || "";
+        return `<details class="risk" style="--i:${i}"><summary><i class="dot ${sev(r.severity)[1]}"></i><span>${esc(r.title)}</span><em>${sev(r.severity)[0]}</em></summary><div class="rk">${r.evidence ? `<p><b>Preuve.</b> ${esc(r.evidence)}</p>` : ""}${r.impact ? `<p><b>Impact.</b> ${esc(r.impact)}</p>` : ""}${rec ? `<p><b>À faire.</b> ${esc(rec)}</p>` : ""}</div></details>`;
+      }).join("")}</div>
+      <div class="actions">${busy ? "" : `<button data-act="fix-setup">Corriger les risques</button>`}${d.files && d.files["analysis.html"] ? `<a href="${esc(d.files["analysis.html"])}" target="_blank" rel="noopener">Rapport complet ↗</a>` : ""}</div>
+    </div>`;
+  }
+
+  // ---------------------------------------------------------- 2. usine
+  const CATS = [
+    ["images", "Images", p => /(^|\/)Dockerfile|\.dockerignore$/i.test(p)],
+    ["pipeline", "Pipeline", p => /gitlab-ci\.ya?ml$|^\.github\/workflows\//i.test(p)],
+    ["obs", "Observabilité", p => /monitoring|prometheus|grafana|servicemonitor|alert/i.test(p)],
+    ["k8s", "Kubernetes", p => /^(k8s|kubernetes|manifests|deploy)\//i.test(p)],
+    ["cfg", "Configuration et docs", () => true],
+  ];
+  const catOf = p => CATS.find(c => c[2](p))[0];
+  function fstate(c, v) {
+    if (v && v.ok === true) return ["ok", "✓", "validé"];
+    if (v && v.ok === false) return ["ko", "✕", "invalide"];
+    return ({ planned: ["", "○", "prévu"], generating: ["run", "", "écriture…"], generated: ["acc", "◑", "généré"], written: ["ink", "●", "écrit"],
+              deleted: ["ink", "−", "supprimé"], skipped: ["", "–", "ignoré"], failed: ["ko", "✕", "échec"] })[c.status] || ["", "○", c.status];
+  }
+  function fxModel() {
+    const j = S.jobs.fix;
+    if (j && (running("fix") || j.status === "error")) { const s = j.snapshot || {}; return { live: true, stage: s.stage || "plan", branch: s.branch, summary: s.summary, changes: s.changes || [], validations: s.validations || [], commit: s.commit, target_kind: s.target_kind }; }
+    return S.data.fix ? { live: false, ...S.data.fix, changes: S.data.fix.changes || [], validations: S.data.fix.validations || [] } : null;
+  }
+  const lanesOf = tk => ((S.targets[tk] || "").split(":").slice(1).join(":") || "").split("→").map(s => s.replace(/\(.*?\)/g, "").trim()).filter(Boolean);
+  function renderFactory() {
+    const j = S.jobs.fix, f = fxModel();
+    if (!S.ui.fixSetup && !f && !j) return drop("factory");
+    const el = stage("factory", "2", "Usine logicielle"), run = running("fix"), failed = !!j && j.status === "error";
+    const idx = { plan: 0, files: 1, apply: 2, validate: 3, done: 4 }[f && f.stage] ?? 0;
+    setHTML($(".st-sub", el), f && f.branch ? `<code>${esc(f.branch)}</code>` : "");
+    status(el, "fix", f && !f.live ? (j && j.elapsed ? `construite · ${dur(j.elapsed)}` : "construite") : "");
+    if (f || j) steps(el, ["Plan", "Fichiers", "Application", "Validation", "Rapport"], f && !f.live ? 5 : idx, failed);
+    else setHTML($(".steps", el), "");
+    live(el, "fix");
+    const viz = $(".viz", el), res = $(".result", el);
+    if (run && f) {
+      if (!$(".fx-count", viz)) viz.innerHTML = `<p class="facts fx-count" style="margin:0"></p><div class="fx-groups"></div>`;
+      const vmap = {}; f.validations.forEach(v => { if (v.path) vmap[v.path] = v; });
+      const cnt = s => f.changes.filter(c => s.includes(c.status)).length;
+      setHTML($(".fx-count", viz), f.changes.length ? `<span>${f.changes.length} fichiers prévus</span><span>${cnt(["generated", "written", "deleted"])} générés</span><span>${cnt(["written", "deleted"])} écrits</span>` : `<span><span class="spin"></span>le modèle prépare le plan · une à quatre minutes avec un modèle gratuit</span>`);
+      const groups = CATS.map(c => ({ id: c[0], label: c[1], files: f.changes.filter(x => catOf(x.path) === c[0]) })).filter(g => g.files.length);
+      sync($(".fx-groups", viz), groups, g => g.id, g => h(`<div class="grp"><div class="grp-h"><span>${g.label}</span><span class="n"></span></div><div class="rows"></div></div>`), (ge, g) => {
+        $(".n", ge).textContent = `${g.files.filter(x => ["written", "deleted"].includes(x.status)).length}/${g.files.length}`;
+        sync($(".rows", ge), g.files, x => x.path, () => h(`<div class="r"><span class="ic"></span><code class="nm"></code><span class="rt"></span></div>`), (re, x) => {
+          const [cls, ic, txt] = fstate(x, vmap[x.path]);
+          const icEl = $(".ic", re); icEl.className = "ic " + cls; setHTML(icEl, cls === "run" ? `<span class="spin"></span>` : ic);
+          $(".nm", re).textContent = x.path; $(".rt", re).textContent = txt;
+        });
+      });
+    } else viz.innerHTML = "";
+    if (run) setHTML(res, "");
+    else if (failed) setHTML(res, `<div class="card">${errNote(j)}<div class="actions"><button data-act="fix-rebuild">Réessayer</button></div></div>`);
+    else if (f) setHTML(res, factoryCard(f));
+    else setHTML(res, factorySetup());
+    journal(el, "fix");
+  }
+  function factorySetup() {
+    const d = S.data.analysis; if (!d) return "";
+    const risks = (d.data && d.data.risks) || [], src = d.source || "";
+    const defT = /github\.com/.test(src) ? "k8s-github" : "k8s-gitlab";
+    const name = k => k === "k8s-gitlab" ? "Kubernetes + GitLab CI" : k === "k8s-github" ? "Kubernetes + GitHub Actions" : "Docker Compose durci";
+    return `<div class="card">
+      <p class="lead" style="margin-top:0">L'agent écrit une usine logicielle complète sur une branche Git dédiée : Dockerfiles, manifests, pipeline CI/CD avec contrôles de sécurité, observabilité. Rien n'est poussé sans votre accord.</p>
+      <p class="lbl">Risques à traiter</p>
+      <div class="checks" id="fix-risks">${risks.map((r, i) => `<label class="check"><input type="checkbox" value="${i + 1}" checked><i class="dot ${sev(r.severity)[1]}"></i><span>${esc(r.title)}</span></label>`).join("")}</div>
+      <label class="field">Plateforme<select id="target-kind">${Object.keys(S.targets).map(k => `<option value="${k}"${k === defT ? " selected" : ""}>${name(k)}</option>`).join("")}</select></label>
+      <p class="muted small" id="target-desc">${esc(S.targets[defT] || "")}</p>
+      <div class="actions"><button data-act="fix-go">Construire l'usine</button><button class="link" data-act="fix-cancel">Annuler</button><span class="muted small">5 à 15 minutes avec un modèle gratuit</span></div>
+    </div>`;
+  }
+  function factoryCard(f) {
+    const vs = f.validations || [], okv = vs.filter(v => v.ok === true).length, kov = vs.filter(v => v.ok === false).length;
+    const written = f.changes.filter(c => ["written", "deleted"].includes(c.status)).length;
+    const tk = f.target_kind || (f.changes.some(c => /^\.github\//.test(c.path)) ? "k8s-github" : "k8s-gitlab");
+    const vmap = {}; vs.forEach(v => { if (v.path) vmap[v.path] = v; });
+    const groups = CATS.map(c => ({ label: c[1], files: f.changes.filter(x => catOf(x.path) === c[0]) })).filter(g => g.files.length);
+    const lanes = lanesOf(tk), files = f.files || {};
+    const deployed = S.data.deploy || S.jobs.deploy, published = S.data.published || S.ui.publishSetup || S.jobs.publish;
+    return `<div class="card">
+      <div class="card-h"><h3>Branche <code>${esc(f.branch)}</code></h3><span class="muted small mono">${esc((f.commit || "").slice(0, 8))}</span></div>
+      ${f.summary ? `<p class="lead">${esc(f.summary)}</p>` : ""}
+      <p class="facts"><span>${written} fichiers écrits</span><span><i class="dot ok"></i>${okv} validés</span>${kov ? `<span><i class="dot ko"></i>${kov} en échec</span>` : ""}</p>
+      ${lanes.length ? `<p class="muted small" style="margin:0 0 8px">Pipeline : ${lanes.map(esc).join(" › ")}</p>` : ""}
+      <details class="more"><summary>Voir les ${f.changes.length} fichiers</summary>${groups.map(g => `<div class="grp"><div class="grp-h"><span>${g.label}</span><span>${g.files.length}</span></div><div class="rows">${g.files.map(x => { const [cls, ic, txt] = fstate(x, vmap[x.path]); return `<div class="r" title="${esc(x.purpose)}"><span class="ic ${cls}">${ic}</span><code class="nm">${esc(x.path)}</code><span class="rt">${txt}</span></div>`; }).join("")}</div></div>`).join("")}</details>
+      ${(f.not_fixed || []).length ? `<details class="more"><summary>Non corrigé (${f.not_fixed.length})</summary><ul>${f.not_fixed.map(n => `<li>Risque ${esc(n.risk_ref)} : ${esc(n.why)}</li>`).join("")}</ul></details>` : ""}
+      ${(f.manual_steps || []).length ? `<details class="more"><summary>Étapes manuelles (${f.manual_steps.length})</summary><ol>${f.manual_steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol></details>` : ""}
+      <div class="actions">${deployed ? "" : `<button data-act="deploy-setup">Déployer sur le cluster</button>`}${published ? "" : `<button class="ghost" data-act="publish-setup">Publier sur GitHub ou GitLab</button>`}${files["REMEDIATION.md"] ? `<a href="${esc(files["REMEDIATION.md"])}?download=1" target="_blank" rel="noopener">REMEDIATION.md</a>` : ""}<button class="link" data-act="fix-rebuild">Reconstruire</button></div>
+    </div>`;
+  }
+
+  // ---------------------------------------------------------- 3. cluster
+  const KIND_LABEL = { desktop: "Docker Desktop", k3s: "k3s" };
+  const OBS_LABEL = { metrics: "Prometheus, Grafana, Alertmanager", ingress: "Traefik", logs: "Loki", collector: "Alloy" };
+  function renderCluster() {
+    const j = S.jobs.deploy, r = S.data.deploy, run = running("deploy"), setup = S.ui.deploySetup && !run;
+    if (!j && !r && !setup) return drop("cluster");
+    const el = stage("cluster", "3", "Déploiement"), snap = (j && j.snapshot) || {};
+    const viz = $(".viz", el), res = $(".result", el);
+    if (setup) {
+      setHTML($(".st-sub", el), "choix du cluster");
+      status(el, "deploy", ""); setHTML($(".steps", el), ""); live(el, "deploy"); viz.innerHTML = "";
+      setHTML(res, deployForm()); journal(el, "deploy");
+      return;
+    }
+    const jobFailed = !!j && j.status === "error", failed = jobFailed || (!!r && r.ok === false && !run);
+    const map = { prereq: 0, platform: 1, build: 2, load: 2, manifests: 3, apply: 4, rollout: 4, repair: 4, access: 5, done: 6 };
+    const idx = run ? (map[snap.stage] ?? 0) : r && r.ok ? 6 : ({ build: 2, manifests: 3, rollout: 4 }[r && r.failed_stage] ?? 4);
+    const kind = snap.cluster_kind || (r && r.cluster_kind) || (S.data.live && S.data.live.cluster_kind) || "";
+    const ns = snap.namespace || (r && r.namespace);
+    setHTML($(".st-sub", el), esc([KIND_LABEL[kind], ns ? "namespace " + ns : ""].filter(Boolean).join(" · ")));
+    status(el, "deploy", r && r.ok ? (j && j.elapsed ? `en ligne · ${dur(j.elapsed)}` : "en ligne") : "", failed);
+    steps(el, ["Cluster", "Observabilité", "Images", "Manifests", "Démarrage", "Accès"], idx, failed);
+    live(el, "deploy");
+    if (run) {
+      if (!$(".cl-img", viz)) viz.innerHTML = `<div class="cl-obs" hidden><p class="lbl">Observabilité</p><div class="rows"></div></div><div class="cl-img" hidden><p class="lbl">Images</p><div class="rows"></div></div><div class="cl-wl" hidden><p class="lbl">Charges de travail</p><div class="rows"></div></div><div class="cl-rep" hidden><p class="lbl">Réparations de l'agent</p><div class="rows"></div></div>`;
+      const comps = Object.entries(snap.platform || {});
+      $(".cl-obs", viz).hidden = !comps.length;
+      sync($(".cl-obs .rows", viz), comps, c => c[0], () => h(`<div class="r"><span class="ic"></span><span class="nm"></span><span class="rt"></span></div>`), (e, [id, c]) => {
+        const st = { "installation": ["run", ""], "prêt": ["ok", "●"], "échec": ["ko", "✕"] }[c.state] || ["", "○"];
+        const ic = $(".ic", e); ic.className = "ic " + st[0]; setHTML(ic, st[0] === "run" ? `<span class="spin"></span>` : st[1]);
+        $(".nm", e).textContent = OBS_LABEL[id] || id; $(".rt", e).textContent = `${c.state}${c.total ? ` · ${c.ready}/${c.total} pods` : ""}`;
+      });
+      const imgs = snap.images || [];
+      $(".cl-img", viz).hidden = !imgs.length;
+      sync($(".cl-img .rows", viz), imgs, b => b.component, () => h(`<div class="r"><span class="ic"></span><span class="nm"></span><span class="rt"></span></div>`), (e, b) => {
+        const st = { "construction": ["run", ""], "construite": ["acc", "◑"], "chargée dans le cluster": ["ok", "●"], "échec": ["ko", "✕"] }[b.status] || ["", "○"];
+        const ic = $(".ic", e); ic.className = "ic " + st[0]; setHTML(ic, st[0] === "run" ? `<span class="spin"></span>` : st[1]);
+        $(".nm", e).textContent = b.component; $(".rt", e).textContent = b.status + (b.seconds ? ` · ${Math.round(b.seconds)} s` : "");
+      });
+      workloads($(".cl-wl", viz), snap.workloads || [], snap.pods || []);
+      const reps = snap.repairs || [];
+      $(".cl-rep", viz).hidden = !reps.length;
+      sync($(".cl-rep .rows", viz), reps, x => x.attempt + ":" + x.commit, x => h(`<div class="r"><span class="ic acc">↻</span><span class="nm" title="${esc(x.explanation)}">${esc(x.explanation)}</span><span class="rt">${esc(x.model)}</span></div>`));
+      setHTML(res, "");
+    } else {
+      viz.innerHTML = "";
+      setHTML(res, jobFailed ? `<div class="card">${errNote(j)}<div class="actions"><button data-act="deploy-setup">Relancer</button></div></div>` : clusterCard(r));
+      const w = $(".cl-live", res);
+      if (w && S.data.live) workloads(w, S.data.live.workloads || [], S.data.live.pods || []);
+    }
+    journal(el, "deploy");
+  }
+  function deployForm() {
+    const cl = S.clusters;
+    if (!cl) return `<div class="card"><p class="muted" style="margin:0"><span class="spin"></span> lecture des clusters disponibles…</p></div>`;
+    const prevKind = (S.data.deploy && S.data.deploy.cluster_kind) || (S.data.live && S.data.live.cluster_kind) || "desktop";
+    const pick = (cl.find(c => c.id === prevKind && c.available) || cl.find(c => c.ready) || cl.find(c => c.available) || {}).id;
+    return `<div class="card">
+      <p class="lead" style="margin-top:0">L'agent construit les images de la branche corrigée, les charge dans le cluster, applique les manifests et vous donne l'adresse de l'appli. Il répare seul les erreurs connues.</p>
+      <p class="lbl">Cluster</p>
+      <div class="checks">${cl.map(c => `<label class="check"><input type="radio" name="cl-kind" value="${c.id}"${c.id === pick ? " checked" : ""}${c.available ? "" : " disabled"}><span><b>${esc(c.label)}</b> <span class="muted small">· ${esc(c.detail)}</span><br><span class="muted small">${c.ready ? `<i class="dot ok"></i> ` : ""}${esc(c.note)}</span></span></label>`).join("")}</div>
+      <label class="check" style="border:0"><input type="checkbox" id="cl-obs" checked><span>Observabilité : Prometheus, Grafana, Loki <span class="muted small">· installée au premier déploiement sur ce cluster, environ 5 minutes</span></span></label>
+      <div class="actions"><button data-act="deploy-go"${pick ? "" : " disabled"}>Déployer</button><button class="link" data-act="deploy-cancel">Annuler</button></div>
+    </div>`;
+  }
+  function workloads(box, wls, pods) {
+    box.hidden = !wls.length;
+    sync($(".rows", box), wls, w => w.kind + "/" + w.name, () => h(`<div class="r"><span class="ic"></span><span class="nm"></span><span class="rt"><span class="pods"></span><span class="rep"></span></span></div>`), (e, w) => {
+      const mine = pods.filter(p => p.name.startsWith(w.name + "-")), bad = mine.some(p => p.reason);
+      const ic = $(".ic", e); ic.className = "ic " + (w.ready ? "ok" : bad ? "ko" : "run"); setHTML(ic, w.ready ? "●" : bad ? "✕" : `<span class="spin"></span>`);
+      $(".nm", e).textContent = w.name;
+      setHTML($(".pods", e), mine.map(p => { const ok = p.ready && p.ready !== "0/0" && p.ready.split("/")[0] === p.ready.split("/")[1]; return `<i class="${ok ? "ok" : p.reason ? "ko" : ""}" title="${esc(p.name + " · " + p.phase + (p.reason ? " · " + p.reason : ""))}"></i>`; }).join(""));
+      $(".rep", e).textContent = `${w.replicas} prêts`;
+    });
+  }
+  function obsBlock(r) {
+    const has = o => o && (o.installed || []).length && o.grafana;
+    const o = has(r.observability) ? r.observability : has(S.data.live && S.data.live.observability) ? S.data.live.observability : null;
+    if (!o) return "";
+    return `<p class="lbl" style="margin-top:14px">Observabilité</p><div class="rows">
+      <div class="r"><span class="nm"><a href="${esc(o.grafana)}" target="_blank" rel="noopener">Grafana ↗</a> <span class="muted small">tableau de bord « Applications déployées par l'agent »</span></span><span class="rt mono">${esc(o.user)} · ${esc(o.password || "")}</span></div>
+      <div class="r"><span class="nm"><a href="${esc(o.prometheus)}" target="_blank" rel="noopener">Prometheus ↗</a>  ·  <a href="${esc(o.alertmanager)}" target="_blank" rel="noopener">Alertmanager ↗</a></span></div>
+    </div>`;
+  }
+  function clusterCard(r) {
+    if (!r) return "";
+    const files = r.files || {}, creds = Object.entries(r.credentials || {}), reps = r.repairs || [];
+    const others = Object.values(r.urls || {}).filter(u => u !== r.url);
+    const repList = reps.length ? `<ol>${reps.map(x => `<li>${esc(x.explanation)} <span class="muted">· ${esc(x.model)}</span></li>`).join("")}</ol>` : "";
+    if (r.ok === false) return `<div class="card">
+      <h3>Le déploiement n'a pas abouti</h3>
+      <p class="lead">Étape en échec : ${esc(r.failed_stage || "démarrage")}.${reps.length ? ` L'agent a tenté ${reps.length} réparation${reps.length > 1 ? "s" : ""}.` : ""}</p>
+      ${r.diagnostic ? `<details class="more" open><summary>Diagnostic du cluster</summary><pre class="diag">${esc(r.diagnostic)}</pre></details>` : ""}
+      ${reps.length ? `<details class="more"><summary>Réparations tentées</summary>${repList}</details>` : ""}
+      <div class="actions"><button data-act="deploy-setup">Redéployer</button>${r.namespace ? `<button class="danger" data-act="undeploy">Retirer</button>` : ""}</div></div>`;
+    return `<div class="card">
+      ${r.url ? `<a class="golink" href="${esc(r.url)}" target="_blank" rel="noopener">Ouvrir l'application <span>${esc(r.url)} ↗</span></a>` : ""}
+      <p class="facts">${r.branch ? `<span><code>${esc(r.branch)}</code>${r.commit ? ` @ ${esc(r.commit.slice(0, 8))}` : ""}</span>` : ""}${reps.length ? `<span>${reps.length} réparation${reps.length > 1 ? "s" : ""} automatique${reps.length > 1 ? "s" : ""}</span>` : ""}${others.map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join("")}</p>
+      <div class="cl-live" hidden><p class="lbl">En direct</p><div class="rows"></div></div>
+      ${obsBlock(r)}
+      ${reps.length ? `<details class="more"><summary>Ce que l'agent a réparé</summary>${repList}</details>` : ""}
+      ${creds.length ? `<details class="more"><summary>Identifiants locaux générés</summary><table class="creds">${creds.flatMap(([, kv]) => Object.entries(kv).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`)).join("")}</table></details>` : ""}
+      ${(r.warnings || []).length ? `<details class="more"><summary>Avertissements (${r.warnings.length})</summary><ul>${r.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></details>` : ""}
+      <div class="actions"><button class="ghost" data-act="deploy-setup">Redéployer</button><button class="danger" data-act="undeploy">Retirer</button>${files["DEPLOYMENT.md"] ? `<a href="${esc(files["DEPLOYMENT.md"])}?download=1" target="_blank" rel="noopener">DEPLOYMENT.md</a>` : ""}</div>
+    </div>`;
+  }
+
+  // ---------------------------------------------------------- 4. publication
+  function renderPublish() {
+    const j = S.jobs.publish, pub = S.data.published, run = running("publish");
+    if (!S.ui.publishSetup && !j && !pub) return drop("publish");
+    const el = stage("publish", "4", "Publication");
+    const failed = !!j && j.status === "error";
+    const keys = ["auth", "repo", "push", "pr", "done"];
+    const idx = run || failed ? Math.max(0, keys.indexOf(lastStep(j))) : pub ? 5 : -1;
+    setHTML($(".st-sub", el), pub ? esc(`${pub.label} · ${pub.owner}/${pub.repo}`) : "GitHub ou GitLab");
+    status(el, "publish", pub && !S.ui.publishSetup ? "publiée" : "");
+    if (idx >= 0) steps(el, ["Jeton", "Dépôt", "Envoi", "Demande de fusion"], Math.min(idx, 4), failed); else setHTML($(".steps", el), "");
+    live(el, "publish");
+    const res = $(".result", el);
+    if (run) setHTML(res, "");
+    else if (S.ui.publishSetup || failed) setHTML(res, (failed ? `<p class="note${j.cancelled ? "" : " ko"}" style="margin:0 0 10px">${esc(j.error)}</p>` : "") + publishForm(pub));
+    else if (pub) setHTML(res, `<div class="card">
+        <div class="card-h"><h3><a href="${esc(pub.web_url)}" target="_blank" rel="noopener">${esc(pub.owner)}/${esc(pub.repo)} ↗</a></h3><span class="muted small">${pub.private ? "privé" : "public"} · ${esc(pub.label)}</span></div>
+        <p class="facts">${pub.pr_url ? `<a href="${esc(pub.pr_url)}" target="_blank" rel="noopener">${pub.platform === "github" ? "Pull request" : "Merge request"} ↗</a>` : ""}<a href="${esc(pub.pipelines_url)}" target="_blank" rel="noopener">Pipelines ↗</a><a href="${esc(pub.settings_url)}" target="_blank" rel="noopener">Secrets CI ↗</a></p>
+        <p class="muted small" style="margin:0">Ajoutez le secret <code>KUBE_CONFIG</code> pour activer le job de déploiement du pipeline.</p>
+        ${(pub.warnings || []).map(w => `<p class="note warn">${esc(w)}</p>`).join("")}
+        <div class="actions"><button class="link" data-act="publish-setup">Republier</button></div></div>`);
+    else setHTML(res, "");
+    journal(el, "publish");
+  }
+  function publishForm(pub) {
+    const m = S.missions.find(x => x.name === S.project) || {}, f = S.data.fix || {};
+    const gh = (f.changes || []).some(c => /^\.github\/workflows\//.test(c.path)) || f.target_kind === "k8s-github";
+    const def = pub ? pub.platform : gh ? "github" : "gitlab";
+    const conf = id => (S.forges.find(x => x.id === id) || {}).configured;
+    return `<div class="card">
+      <p class="lead" style="margin-top:0">Crée le dépôt sur votre compte, pousse la branche corrigée et ouvre la demande de fusion : le pipeline démarre chez la forge.</p>
+      <div class="grid2"><select id="pub-forge" aria-label="Forge"><option value="github"${def === "github" ? " selected" : ""}>GitHub${conf("github") ? "" : " · sans jeton"}</option><option value="gitlab"${def === "gitlab" ? " selected" : ""}>GitLab${conf("gitlab") ? "" : " · sans jeton"}</option></select>
+      <input id="pub-repo" value="${esc((pub && pub.repo) || m.repo_name || "")}" aria-label="Nom du dépôt" spellcheck="false" placeholder="nom-du-depot"></div>
+      <label class="check" style="border:0"><input type="checkbox" id="pub-private"${!pub || pub.private ? " checked" : ""}><span>Dépôt privé</span></label>
+      ${!conf("github") && !conf("gitlab") ? `<p class="note">Un jeton personnel GitHub ou GitLab est nécessaire. <button class="link" data-act="open-settings" style="padding:0;color:var(--accent)">Ajouter un jeton</button></p>` : ""}
+      <div class="actions"><button data-act="publish-go">Publier</button><button class="link" data-act="publish-cancel">Annuler</button></div>
+    </div>`;
+  }
+
+  // ============================================================ tiroir : missions, plateforme, réglages
+  function openDrawer(kind) {
+    S.drawer = kind; $("#drawer").hidden = false; $("#shade").hidden = false; $("#drawer")._h = null;
+    if (kind === "settings") loadForges().then(renderDrawer);
+    if (kind === "missions") loadMissions().then(renderDrawer);
+    renderDrawer();
+  }
+  function closeDrawer() { S.drawer = null; $("#drawer").hidden = true; $("#shade").hidden = true; }
+  addEventListener("keydown", e => { if (e.key === "Escape" && S.drawer) closeDrawer(); });
+  const head = t => `<div class="drawer-h"><h3>${t}</h3><button class="link" data-act="close">Fermer</button></div>`;
+  function renderDrawer() {
+    const d = $("#drawer"); if (!S.drawer) return;
+    if (S.drawer === "missions") {
+      setHTML(d, head("Missions") + (S.missions.length ? missionRows(S.missions) : `<p class="muted">Aucune mission pour l'instant.</p>`));
+      return;
+    }
+    // réglages : écrits à l'ouverture et après une action, jamais pendant la saisie
+    const provs = S.providers;
+    if (!S.provSel || !provs.some(p => p.id === S.provSel)) S.provSel = (provs.find(p => !p.configured) || provs[0] || {}).id;
+    const p = provs.find(x => x.id === S.provSel), fg = S.forges.find(x => x.id === S.forgeSel) || S.forges[0];
+    if (fg) S.forgeSel = fg.id;
+    d._h = null;
+    d.innerHTML = head("Réglages") + `
+      <section><p class="lbl">Fournisseur d'IA</p>
+        <select id="prov-sel">${provs.map(x => `<option value="${x.id}"${x.id === S.provSel ? " selected" : ""}>${x.configured ? "● " : "○ "}${esc(x.label)}${x.id === S.defaultBackend ? " · par défaut" : ""}</option>`).join("")}</select>
+        ${p ? `${p.needs_key || p.editable_url ? `<label class="field">Clé API<input type="password" id="pk" placeholder="${esc(p.key_masked || p.key_hint || "clé")}" autocomplete="off"></label>` : ""}
+        ${p.editable_url ? `<label class="field">URL de base<input type="text" id="pu" value="${esc(p.base_url)}"></label>` : ""}
+        <label class="field">Modèle par défaut${p.models.length ? ` · ${p.models.length} disponibles chez ce fournisseur` : ""}<select id="pm">${p.models.length ? p.models.map(m => `<option${m === p.default_model ? " selected" : ""}>${esc(m)}</option>`).join("") : `<option value="">${p.configured ? (p.models_loading ? "chargement…" : "aucun modèle trouvé") : "enregistrez d'abord une clé"}</option>`}</select></label>
+        ${p.models_error ? `<p class="note ko">${esc(p.models_error)}</p>` : ""}
+        <div class="actions"><button data-act="prov-save">Enregistrer</button><button class="ghost" data-act="prov-test">Tester</button><button class="link" data-act="prov-refresh"${p.configured ? "" : " disabled"}>Actualiser la liste</button><button class="link" data-act="prov-default"${p.configured ? "" : " disabled"}>Par défaut</button><button class="link" data-act="prov-clear"${p.source === "settings" ? "" : " disabled"}>Effacer</button></div>
+        <p class="muted small" id="p-msg">${p.configured ? (p.source === "env" ? "clé fournie par " + esc(p.env) : "configuré") : "non configuré"} · opencode fonctionne sans clé</p>` : ""}
+      </section>
+      <section><p class="lbl">GitHub et GitLab</p>
+        <select id="forge-sel">${S.forges.map(x => `<option value="${x.id}"${fg && x.id === fg.id ? " selected" : ""}>${x.configured ? "● " : "○ "}${esc(x.label)}</option>`).join("")}</select>
+        ${fg ? `<label class="field">Jeton personnel<input type="password" id="fk" placeholder="${esc(fg.token_masked || fg.key_hint)}" autocomplete="off"></label>
+        ${fg.editable_url ? `<label class="field">Instance<input type="text" id="fu" value="${esc(fg.url)}"></label>` : ""}
+        <p class="muted small" style="margin:6px 0 0">Droits : ${esc(fg.scopes)}</p>
+        <div class="actions"><button data-act="forge-save">Enregistrer</button><button class="ghost" data-act="forge-test"${fg.configured ? "" : " disabled"}>Tester</button><button class="link" data-act="forge-clear"${fg.source === "settings" ? "" : " disabled"}>Effacer</button></div>
+        <p class="muted small" id="f-msg">${fg.configured ? (fg.source === "env" ? "jeton fourni par " + esc(fg.env) : "configuré") : "non configuré"} · stocké sur le serveur, jamais réaffiché</p>` : ""}
+      </section>
+      <section><p class="lbl">Clusters</p><div class="rows" id="set-clusters"><p class="muted small">lecture…</p></div></section>
+      <section><p class="lbl">Nettoyage</p>
+        <p class="muted small" id="cache-info" style="margin-top:0">…</p>
+        <button class="danger" data-act="clear-all">Tout nettoyer</button>
+        <p class="muted small">Dépôts clonés, analyses et applis déployées. Les clés et la plateforme restent.</p>
+      </section>`;
+    GET("/api/clusters").then(list => {
+      const box = $("#set-clusters"); if (!box) return;
+      box.innerHTML = list.map(c => {
+        const obs = (c.observability && c.observability.installed || []).length;
+        return `<div class="r"><span class="nm">${esc(c.label)}<br><span class="muted small">${esc(c.note)}${obs ? " · observabilité installée" : ""}</span></span><span class="rt">${obs ? `<button class="link" data-act="obs-remove" data-cluster="${c.id}">Retirer l'observabilité</button>` : ""}${c.id === "k3s" && c.exists ? `<button class="link" data-act="k3s-delete">Supprimer</button>` : ""}</span></div>`;
+      }).join("");
+    }).catch(() => {});
+    GET("/api/cache").then(c => { const e = $("#cache-info"); if (e) e.textContent = `${c.clones.length} dépôt(s) cloné(s) · ${c.reports} analyse(s) · ${((c.bytes + c.reports_bytes) / 1048576).toFixed(1)} Mo`; }).catch(() => {});
+  }
+  const msg = (id, t) => { const e = $(id); if (e) e.textContent = t; };
+  function provPayload(extra = {}) { const b = { id: S.provSel, ...extra }; if ($("#pm") && $("#pm").value) b.default_model = $("#pm").value; if ($("#pk") && $("#pk").value) b.api_key = $("#pk").value; if ($("#pu")) b.base_url = $("#pu").value; return b; }
+  async function provRefresh() {
+    msg("#p-msg", "interrogation du fournisseur…");
+    try { const r = await POST("/api/providers/refresh", { id: S.provSel }); S.providers = r.providers; fillModels(); renderDrawer(); msg("#p-msg", "liste à jour"); }
+    catch (e) { msg("#p-msg", "erreur : " + e.message); }
+  }
+  async function provSave(extra) { try { await POST("/api/providers", provPayload(extra)); await loadModels(); renderDrawer(); msg("#p-msg", "enregistré"); } catch (e) { msg("#p-msg", "erreur : " + e.message); } }
+  async function provClear() { if (!confirm("Effacer la clé et les réglages de ce fournisseur ?")) return; try { await POST("/api/providers", { id: S.provSel, clear: true }); await loadModels(); renderDrawer(); } catch (e) { msg("#p-msg", "erreur : " + e.message); } }
+  async function provTest() {
+    msg("#p-msg", "test en cours…");
+    try { await POST("/api/providers", provPayload()); const r = await POST("/api/providers/test", { id: S.provSel, model: ($("#pm") && $("#pm").value) || undefined }); await loadModels(); msg("#p-msg", r.ok ? `✓ ${r.model} répond en ${r.latency} s` : `✕ ${r.error}`); }
+    catch (e) { msg("#p-msg", "erreur : " + e.message); }
+  }
+  async function forgeSave() { const b = { id: S.forgeSel }; if ($("#fk").value) b.token = $("#fk").value; if ($("#fu")) b.url = $("#fu").value; try { S.forges = await POST("/api/git", b); renderDrawer(); msg("#f-msg", "enregistré"); render(); } catch (e) { msg("#f-msg", "erreur : " + e.message); } }
+  async function forgeTest() { msg("#f-msg", "test en cours…"); try { const r = await POST("/api/git/test", { id: S.forgeSel }); msg("#f-msg", r.ok ? `✓ connecté en tant que ${r.login}` : `✕ ${r.error}`); } catch (e) { msg("#f-msg", "erreur : " + e.message); } }
+  async function forgeClear() { if (!confirm("Effacer ce jeton ?")) return; try { S.forges = await POST("/api/git", { id: S.forgeSel, clear: true }); renderDrawer(); render(); } catch (e) { msg("#f-msg", "erreur : " + e.message); } }
+
+  // ============================================================ démarrage
+  setInterval(() => { if ($("#st-cluster") && !running("deploy")) loadLive(); }, 5000);
+  (async () => {
+    const q = new URLSearchParams(location.search).get("url"); if (q) $("#target").value = q;
+    await Promise.all([loadModels(), loadMissions(), loadForges()]);
+    await resume();
+    render();
+    if (!anyRunning()) $("#target").focus();
+  })();
+})();
+</script>
+</body>
+</html>

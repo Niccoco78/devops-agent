@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+out/
+.cache/
+data/
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Jamais dans Git : réglages locaux, clés, kubeconfigs, secrets générés, archives d'images, journaux
+*.kubeconfig
+kubeconfig*
+secrets.local.json
+settings.json
+platform.json
+*.pem
+*.key
+*.tar
+*.log
+.DS_Store
+Thumbs.db

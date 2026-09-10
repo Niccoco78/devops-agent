@@ -1,0 +1,28 @@
+services:
+  agent:
+    build: .
+    image: devops-agent
+    container_name: devops-agent
+    ports:
+      - "8080:8080"
+    environment:
+      # Clés API optionnelles : alternative aux réglages saisis dans l'interface (panneau « Fournisseurs d'IA »).
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      # Analyses simultanées maximum
+      - AGENT_MAX_PARALLEL=2
+    volumes:
+      - ./out:/app/out          # rapports générés
+      - agent-cache:/app/.cache # clones des dépôts distants
+      - agent-data:/app/data    # réglages, dont les clés API saisies dans l'interface
+      # Étape 3, déploiement local : le Docker de la machine (construire les images de l'application) et
+      # le kubeconfig de Docker Desktop, en lecture seule (piloter son cluster). Voir README, « Sécurité ».
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${USERPROFILE:-${HOME}}/.kube:/root/.kube-host:ro
+    restart: unless-stopped
+
+volumes:
+  agent-cache:
+  agent-data:
